@@ -207,7 +207,7 @@ function buildSmoothIsland(spec, ctx) {
       // Smooth cosine dome sloping gracefully underwater beyond coastline
       let h;
       if (radialFrac <= 1.0) {
-        const hill = Math.pow(Math.cos(radialFrac * Math.PI * 0.5), 1.35) * spec.height;
+        const hill = Math.pow(Math.max(0, Math.cos(radialFrac * Math.PI * 0.5)), 1.35) * spec.height;
         const undulation = (Math.sin(vx * 0.09 + spec.x) * Math.cos(vz * 0.09 + spec.z)) * 0.55 * (1 - radialFrac);
         h = hill + undulation;
       } else {

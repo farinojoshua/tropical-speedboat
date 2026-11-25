@@ -391,9 +391,9 @@ function hullBeamAt(t) {
     // Full steady aft beam with subtle waist curve
     return 1.34 + Math.sin(t * Math.PI * 1.15) * 0.04;
   }
-  const u = (t - 0.42) / 0.58;
-  // Graceful Carolina-flare bow curve
-  return Math.max(0.03, 1.35 * Math.pow(Math.cos(u * Math.PI * 0.5), 1.32));
+  const u = THREE.MathUtils.clamp((t - 0.42) / 0.58, 0, 1);
+  // Graceful Carolina-flare bow curve (clamp cos >= 0 to avoid NaN on fractional pow)
+  return Math.max(0.03, 1.35 * Math.pow(Math.max(0, Math.cos(u * Math.PI * 0.5)), 1.32));
 }
 
 function buildSmoothVHull() {
