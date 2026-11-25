@@ -2,25 +2,21 @@ import * as THREE from 'three';
 import { sampleOcean } from './waves.js';
 
 /**
- * Generates the Leonida Keys / tropical archipelago world:
- * - Lush mangrove & palm islands positioned to echo the screenshot's opening vista
- * - Distant coastal skyline silhouette
- * - Anchored motor yachts & tall-masted cruising sailboats
- * - Bobbing channel buoys & wooden stunt jump ramps
- * - 12-checkpoint Island Run circuit with glowing 3D magenta waypoint markers
+ * Generates the organic Leonida Keys tropical archipelago:
+ * - Smooth heightmap-sculpted sandy islands with vertex-colored beaches & lush turf (no cylinders!)
+ * - Soft organic mangrove foliage canopies & smoothly curved arched coconut palms
+ * - Pointed-bow curved sailboats & luxury motor yachts (no box hulls!)
+ * - Bobbing channel buoys, rounded jump ramps, and 12-checkpoint Island Run circuit
  */
 export function createWorld(scene) {
   const worldGroup = new THREE.Group();
   scene.add(worldGroup);
 
-  // Island definitions (placed carefully around the open bay; player starts at (0, 0) facing -Z)
   const islandSpecs = [
-    // Opening horizon islands (left mangrove key, far center key, right outer key — matching screenshot!)
     { x: -165, z: -210, radius: 46, height: 6.2, palms: 15, dock: true, tower: true },
     { x: -245, z: -175, radius: 34, height: 4.8, palms: 10, dock: false },
     { x: 42, z: -380, radius: 38, height: 5.4, palms: 12, dock: false },
     { x: 245, z: -265, radius: 42, height: 5.8, palms: 14, dock: true },
-    // Outer circuit keys
     { x: 350, z: -85, radius: 54, height: 7.4, palms: 18, dock: true, lighthouse: true },
     { x: 315, z: 160, radius: 44, height: 6.0, palms: 14, dock: false },
     { x: 145, z: 295, radius: 48, height: 6.8, palms: 16, dock: true },
@@ -33,14 +29,28 @@ export function createWorld(scene) {
     { x: 515, z: -365, radius: 58, height: 7.2, palms: 16, dock: false }
   ];
 
-  // Shared materials
-  const sandMat = new THREE.MeshStandardMaterial({ color: 0xe3d2aa, roughness: 0.92 });
-  const grassMat = new THREE.MeshStandardMaterial({ color: 0x3b6e35, roughness: 0.88 });
-  const mangroveMat = new THREE.MeshStandardMaterial({ color: 0x2a5729, roughness: 0.9 });
-  const mangroveBrightMat = new THREE.MeshStandardMaterial({ color: 0x3f7535, roughness: 0.86 });
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x735b43, roughness: 0.92 });
-  const frondMat = new THREE.MeshStandardMaterial({ color: 0x387832, roughness: 0.78, side: THREE.DoubleSide });
-  const woodMat = new THREE.MeshStandardMaterial({ color: 0x8a6948, roughness: 0.88 });
+  // Shared organic materials
+  const terrainMat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.9,
+    metalness: 0.02
+  });
+  const mangroveMats = [
+    new THREE.MeshStandardMaterial({ color: 0x265428, roughness: 0.88 }),
+    new THREE.MeshStandardMaterial({ color: 0x326630, roughness: 0.85 }),
+    new THREE.MeshStandardMaterial({ color: 0x417a38, roughness: 0.84 })
+  ];
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x765e46, roughness: 0.92 });
+  const frondMat = new THREE.MeshStandardMaterial({
+    color: 0x3b7d34,
+    roughness: 0.72,
+    side: THREE.DoubleSide
+  });
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b6a48, roughness: 0.86 });
+
+  // Pre-build smooth organic foliage blob geometry (reused across islands for 60fps performance)
+  const organicCanopyGeo = buildOrganicCanopyGeometry();
+  const curvedFrondGeo = buildCurvedPalmFrondGeometry();
 
   const islands = [];
   let rng = 1337;
@@ -50,26 +60,33 @@ export function createWorld(scene) {
   };
 
   for (const spec of islandSpecs) {
-    const islandObj = buildIsland(spec, {
-      sandMat, grassMat, mangroveMat, mangroveBrightMat, trunkMat, frondMat, woodMat, rand
+    const islandObj = buildSmoothIsland(spec, {
+      terrainMat,
+      mangroveMats,
+      organicCanopyGeo,
+      trunkMat,
+      frondMat,
+      curvedFrondGeo,
+      woodMat,
+      rand
     });
     worldGroup.add(islandObj);
     islands.push({ x: spec.x, z: spec.z, radius: spec.radius });
   }
 
-  // Distant Vice City / Miami skyline along the northwestern horizon
+  // Distant coastal city skyline
   buildDistantSkyline(worldGroup);
 
-  // NPC sailboats & yachts (including the iconic tall-masted sailboat on the right and yacht on the left!)
+  // Smooth sculpted NPC sailboats & yachts
   const npcVessels = buildNpcVessels(worldGroup);
 
-  // Red & green bobbing navigation buoys
+  // Bobbing channel buoys
   const buoys = buildChannelBuoys(worldGroup);
 
-  // Floating wooden stunt jump ramps
+  // Stunt jump ramps
   const ramps = buildJumpRamps(worldGroup);
 
-  // 12-Checkpoint Island Run circuit (first waypoint straight ahead like the pink marker in screenshot!)
+  // 12-Checkpoint Island Run circuit
   const checkpoints = [
     new THREE.Vector3(-22, 0, -210),
     new THREE.Vector3(-85, 0, -350),
@@ -85,7 +102,6 @@ export function createWorld(scene) {
     new THREE.Vector3(0, 0, -65)
   ];
 
-  // 3D glowing magenta checkpoint ring + floating chevron
   const checkpointMarker = buildCheckpointMarker();
   worldGroup.add(checkpointMarker.group);
 
@@ -97,7 +113,6 @@ export function createWorld(scene) {
   }
 
   function update(time, dt) {
-    // Animate checkpoint ring & beacon
     if (checkpointMarker.group.visible) {
       checkpointMarker.ring.rotation.z = time * 0.9;
       checkpointMarker.chevron.rotation.y = time * 1.8;
@@ -106,7 +121,6 @@ export function createWorld(scene) {
       checkpointMarker.ring.scale.setScalar(pulse);
     }
 
-    // Bob & sail NPC vessels on real ocean waves
     for (const v of npcVessels) {
       if (v.orbitRadius > 0) {
         v.angle += v.orbitSpeed * dt;
@@ -126,7 +140,6 @@ export function createWorld(scene) {
       v.mesh.rotation.z = -w.normal.x * 0.35;
     }
 
-    // Bob channel buoys
     for (const b of buoys) {
       const w = sampleOcean(b.mesh.position.x, b.mesh.position.z, time);
       b.mesh.position.y = w.height - 0.1;
@@ -134,7 +147,6 @@ export function createWorld(scene) {
       b.mesh.rotation.z = -w.normal.x * 0.65;
     }
 
-    // Bob ramps subtly on ocean swells
     for (const r of ramps) {
       const w = sampleOcean(r.x, r.z, time);
       r.mesh.position.y = w.height - 0.15;
@@ -151,81 +163,142 @@ export function createWorld(scene) {
   };
 }
 
-function buildIsland(spec, mats) {
-  const { sandMat, grassMat, mangroveMat, mangroveBrightMat, trunkMat, frondMat, woodMat, rand } = mats;
+/**
+ * Smooth organic heightmap island (polar radial grid with gently sloped sandy beaches
+ * blending into lush grassy mounds — zero flat cylinder edges!).
+ */
+function buildSmoothIsland(spec, ctx) {
+  const { terrainMat, mangroveMats, organicCanopyGeo, trunkMat, frondMat, curvedFrondGeo, woodMat, rand } = ctx;
   const g = new THREE.Group();
   g.position.set(spec.x, 0, spec.z);
 
-  // Sculpted organic sandy mound
-  const sandGeo = new THREE.CylinderGeometry(spec.radius * 0.72, spec.radius * 1.06, spec.height, 26, 4);
-  const posAttr = sandGeo.attributes.position;
-  for (let i = 0; i < posAttr.count; i++) {
-    const vx = posAttr.getX(i);
-    const vy = posAttr.getY(i);
-    const vz = posAttr.getZ(i);
-    const angle = Math.atan2(vz, vx);
-    const radialNoise = 1.0 + Math.sin(angle * 3.0 + spec.x) * 0.13 + Math.cos(angle * 5.0 + spec.z) * 0.08;
-    const hNorm = (vy + spec.height * 0.5) / spec.height;
-    posAttr.setX(i, vx * radialNoise);
-    posAttr.setZ(i, vz * radialNoise);
-    if (hNorm > 0.75) {
-      posAttr.setY(i, vy + Math.sin(vx * 0.12) * Math.cos(vz * 0.12) * 0.9);
+  const rings = 14;
+  const segs = 40;
+  const positions = [];
+  const colors = [];
+  const indices = [];
+
+  const wetSand = new THREE.Color(0xc2b28b);
+  const drySand = new THREE.Color(0xe6d6af);
+  const turfCol = new THREE.Color(0x3a6f35);
+  const tmpCol = new THREE.Color();
+
+  const coastRadius = (angle) =>
+    spec.radius *
+    (1.0 +
+      Math.sin(angle * 2.0 + spec.x * 0.05) * 0.12 +
+      Math.cos(angle * 3.0 + spec.z * 0.04) * 0.09 +
+      Math.sin(angle * 5.0 + spec.x * 0.1) * 0.04);
+
+  // Center crown vertex
+  const centerH = spec.height * 0.85;
+  positions.push(0, centerH, 0);
+  colors.push(turfCol.r, turfCol.g, turfCol.b);
+
+  for (let r = 1; r <= rings; r++) {
+    const rn = r / rings; // 0 -> 1.18 (submerged gentle beach slope)
+    const radialFrac = rn * 1.18;
+    for (let s = 0; s < segs; s++) {
+      const angle = (s / segs) * Math.PI * 2;
+      const rad = coastRadius(angle) * radialFrac;
+      const vx = Math.cos(angle) * rad;
+      const vz = Math.sin(angle) * rad;
+
+      // Smooth cosine dome sloping gracefully underwater beyond coastline
+      let h;
+      if (radialFrac <= 1.0) {
+        const hill = Math.pow(Math.cos(radialFrac * Math.PI * 0.5), 1.35) * spec.height;
+        const undulation = (Math.sin(vx * 0.09 + spec.x) * Math.cos(vz * 0.09 + spec.z)) * 0.55 * (1 - radialFrac);
+        h = hill + undulation;
+      } else {
+        // Gentle submerged sandy shelf
+        h = -(radialFrac - 1.0) * 14.0;
+      }
+
+      positions.push(vx, h, vz);
+
+      // Smooth biome vertex color transition
+      if (h < 0.35) {
+        tmpCol.copy(wetSand).lerp(drySand, THREE.MathUtils.clamp((h + 1.2) / 1.55, 0, 1));
+      } else if (h < 1.8) {
+        tmpCol.copy(drySand).lerp(turfCol, THREE.MathUtils.smoothstep(h, 0.35, 1.8));
+      } else {
+        tmpCol.copy(turfCol);
+      }
+      colors.push(tmpCol.r, tmpCol.g, tmpCol.b);
     }
   }
-  sandGeo.computeVertexNormals();
-  const sandMesh = new THREE.Mesh(sandGeo, sandMat);
-  sandMesh.position.y = spec.height * 0.25 - 1.3;
-  sandMesh.receiveShadow = true;
-  g.add(sandMesh);
 
-  // Lush green inner crown
-  const capGeo = new THREE.CylinderGeometry(spec.radius * 0.55, spec.radius * 0.78, spec.height * 0.65, 20);
-  const capMesh = new THREE.Mesh(capGeo, grassMat);
-  capMesh.position.y = spec.height * 0.42 - 0.6;
-  capMesh.receiveShadow = true;
-  g.add(capMesh);
+  // Center fan triangles
+  for (let s = 0; s < segs; s++) {
+    const next = (s + 1) % segs;
+    indices.push(0, 1 + next, 1 + s);
+  }
+  // Ring quads
+  for (let r = 0; r < rings - 1; r++) {
+    const rowA = 1 + r * segs;
+    const rowB = 1 + (r + 1) * segs;
+    for (let s = 0; s < segs; s++) {
+      const next = (s + 1) % segs;
+      indices.push(rowA + s, rowA + next, rowB + s);
+      indices.push(rowA + next, rowB + next, rowB + s);
+    }
+  }
 
-  // Dense coastal mangrove clusters ringing the island (gives that lush Florida Keys silhouette)
-  const bushCount = Math.floor(spec.radius * 0.75);
-  const bushGeo = new THREE.DodecahedronGeometry(1.0, 1);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const islandMesh = new THREE.Mesh(geo, terrainMat);
+  islandMesh.receiveShadow = true;
+  g.add(islandMesh);
+
+  // Soft organic mangrove foliage clusters along the tropical shoreline
+  const bushCount = Math.floor(spec.radius * 0.72);
   for (let i = 0; i < bushCount; i++) {
-    const a = (i / bushCount) * Math.PI * 2 + (rand() - 0.5) * 0.25;
-    const dist = spec.radius * (0.42 + rand() * 0.48);
+    const a = (i / bushCount) * Math.PI * 2 + (rand() - 0.5) * 0.22;
+    const frac = 0.34 + rand() * 0.48;
+    const dist = coastRadius(a) * frac;
     const bx = Math.cos(a) * dist;
     const bz = Math.sin(a) * dist;
-    const scale = 2.6 + rand() * 3.8;
+    const scale = 2.8 + rand() * 3.6;
+    const groundY = Math.pow(Math.cos(frac * Math.PI * 0.5), 1.35) * spec.height;
 
-    const bush = new THREE.Mesh(bushGeo, i % 2 === 0 ? mangroveMat : mangroveBrightMat);
-    bush.position.set(bx, 1.4 + rand() * 1.8, bz);
-    bush.scale.set(scale * 1.25, scale * (0.62 + rand() * 0.35), scale * 1.15);
-    bush.rotation.y = rand() * Math.PI;
+    const bush = new THREE.Mesh(organicCanopyGeo, mangroveMats[i % mangroveMats.length]);
+    bush.position.set(bx, Math.max(0.9, groundY + scale * 0.28), bz);
+    bush.scale.set(scale * 1.35, scale * (0.68 + rand() * 0.28), scale * 1.25);
+    bush.rotation.y = rand() * Math.PI * 2;
     bush.castShadow = true;
     bush.receiveShadow = true;
     g.add(bush);
   }
 
-  // Tall swaying coconut palm trees
+  // Smoothly curved swaying coconut palm trees with drooping arched fronds
   for (let i = 0; i < spec.palms; i++) {
     const a = rand() * Math.PI * 2;
-    const dist = spec.radius * (0.12 + rand() * 0.56);
-    const palm = createPalmTree(trunkMat, frondMat, 9.5 + rand() * 6.5, rand);
-    palm.position.set(Math.cos(a) * dist, spec.height * 0.42, Math.sin(a) * dist);
-    palm.rotation.y = rand() * Math.PI * 2;
+    const frac = 0.12 + rand() * 0.52;
+    const dist = coastRadius(a) * frac;
+    const groundY = Math.pow(Math.cos(frac * Math.PI * 0.5), 1.35) * spec.height;
+    const palm = createSmoothPalmTree(trunkMat, frondMat, curvedFrondGeo, 9.5 + rand() * 6.5, rand);
+    palm.position.set(Math.cos(a) * dist, Math.max(1.0, groundY - 0.3), Math.sin(a) * dist);
+    palm.rotation.y = a + (rand() - 0.5) * 1.2;
     g.add(palm);
   }
 
-  // Optional wooden pier / dock jutting out into shallow turquoise water
+  // Optional wooden pier / dock
   if (spec.dock) {
     const dockAngle = Math.atan2(-spec.z, -spec.x);
     const dockGroup = new THREE.Group();
     dockGroup.rotation.y = -dockAngle + Math.PI * 0.5;
-    const plank = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.35, 18), woodMat);
+    const plank = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.32, 18), woodMat);
     plank.position.set(0, 1.15, spec.radius + 5);
     plank.castShadow = true;
     dockGroup.add(plank);
     for (let p = 0; p < 5; p++) {
       for (const sx of [-1.7, 1.7]) {
-        const piling = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 4.2, 8), woodMat);
+        const piling = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 4.2, 12), woodMat);
         piling.position.set(sx, 0.2, spec.radius - 2 + p * 3.8);
         dockGroup.add(piling);
       }
@@ -233,71 +306,130 @@ function buildIsland(spec, mats) {
     g.add(dockGroup);
   }
 
-  // Optional coastal watchtower / radio tower (visible on left island in screenshot!)
+  // Optional coastal watchtower
   if (spec.tower) {
-    const towerMat = new THREE.MeshStandardMaterial({ color: 0xc8d2d8, roughness: 0.6 });
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 1.4, 18, 6), towerMat);
-    leg.position.set(4, spec.height + 7, -4);
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.2, 3.2), towerMat);
-    cab.position.set(4, spec.height + 16, -4);
+    const towerMat = new THREE.MeshStandardMaterial({ color: 0xd0dadf, roughness: 0.55 });
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 1.4, 18, 14), towerMat);
+    leg.position.set(4, spec.height + 6, -4);
+    const cab = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 1.7, 2.2, 16), towerMat);
+    cab.position.set(4, spec.height + 15.5, -4);
     g.add(leg, cab);
   }
 
   // Optional tropical striped lighthouse
   if (spec.lighthouse) {
-    const lhWhite = new THREE.MeshStandardMaterial({ color: 0xf6f8fa, roughness: 0.45 });
-    const lhRed = new THREE.MeshStandardMaterial({ color: 0xd93644, roughness: 0.45 });
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 3.4, 24, 16), lhWhite);
-    base.position.set(0, spec.height + 10, 0);
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(2.45, 2.75, 6, 16), lhRed);
-    band.position.set(0, spec.height + 12, 0);
+    const lhWhite = new THREE.MeshStandardMaterial({ color: 0xf6f8fa, roughness: 0.4 });
+    const lhRed = new THREE.MeshStandardMaterial({ color: 0xd93644, roughness: 0.42 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 3.4, 24, 24), lhWhite);
+    base.position.set(0, spec.height + 9.5, 0);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(2.45, 2.75, 6, 24), lhRed);
+    band.position.set(0, spec.height + 11.5, 0);
     const lantern = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.7, 1.7, 3.0, 12),
+      new THREE.CylinderGeometry(1.7, 1.7, 3.0, 20),
       new THREE.MeshBasicMaterial({ color: 0xfff2b2 })
     );
-    lantern.position.set(0, spec.height + 23.2, 0);
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(2.3, 2.6, 12), lhRed);
-    roof.position.set(0, spec.height + 26.0, 0);
+    lantern.position.set(0, spec.height + 22.7, 0);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(2.35, 2.8, 20), lhRed);
+    roof.position.set(0, spec.height + 25.6, 0);
     g.add(base, band, lantern, roof);
   }
 
   return g;
 }
 
-function createPalmTree(trunkMat, frondMat, height, rand) {
-  const g = new THREE.Group();
-  const segments = 5;
-  const lean = 0.08 + rand() * 0.14;
-  let curY = 0;
-  let curZ = 0;
+/**
+ * Smooth organic billowing foliage sphere (zero sharp faceted dodecahedron edges!).
+ */
+function buildOrganicCanopyGeometry() {
+  const geo = new THREE.SphereGeometry(1.0, 16, 12);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const lobe = 1.0 + Math.sin(x * 3.1 + y * 2.3) * 0.14 + Math.cos(z * 2.9 - y * 2.1) * 0.12;
+    const flatBottom = y < -0.2 ? 0.65 : 1.0;
+    pos.setXYZ(i, x * lobe, y * lobe * flatBottom, z * lobe);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
 
-  for (let i = 0; i < segments; i++) {
-    const segH = height / segments;
-    const rBottom = 0.42 * (1 - i * 0.11);
-    const rTop = 0.42 * (1 - (i + 1) * 0.11);
-    const seg = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, segH * 1.08, 6), trunkMat);
-    const tilt = lean * (i + 0.5);
-    seg.position.set(0, curY + segH * 0.5, curZ + Math.sin(tilt) * segH * 0.5);
-    seg.rotation.x = tilt;
-    seg.castShadow = true;
-    g.add(seg);
-    curY += Math.cos(tilt) * segH;
-    curZ += Math.sin(tilt) * segH;
+/**
+ * Arched drooping tropical palm frond mesh.
+ */
+function buildCurvedPalmFrondGeometry() {
+  const segs = 10;
+  const len = 5.4;
+  const positions = [];
+  const indices = [];
+
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    const z = t * len;
+    // Graceful upward-then-drooping parabolic frond arch
+    const y = Math.sin(t * Math.PI * 0.85) * 1.15 - t * t * 1.65;
+    const halfW = Math.sin(Math.pow(t, 0.7) * Math.PI) * 0.92;
+    // Subtle V-fold along center spine
+    const droopEdge = -halfW * 0.25;
+
+    positions.push(
+      -halfW, y + droopEdge, z,
+      0, y + 0.08, z,
+      halfW, y + droopEdge, z
+    );
   }
 
-  // Crown of radiating palm fronds
+  for (let i = 0; i < segs; i++) {
+    const a = i * 3;
+    const b = (i + 1) * 3;
+    indices.push(a, a + 1, b, a + 1, b + 1, b);
+    indices.push(a + 1, a + 2, b + 1, a + 2, b + 2, b + 1);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function createSmoothPalmTree(trunkMat, frondMat, curvedFrondGeo, height, rand) {
+  const g = new THREE.Group();
+  const leanDist = 1.6 + rand() * 2.6;
+  const curve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, height * 0.35, leanDist * 0.28),
+    new THREE.Vector3(0, height * 0.72, leanDist * 0.68),
+    new THREE.Vector3(0, height, leanDist)
+  ]);
+
+  // Smooth tapered curved trunk
+  const trunkGeo = new THREE.TubeGeometry(curve, 14, 0.32, 10, false);
+  const pos = trunkGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const t = THREE.MathUtils.clamp(y / height, 0, 1);
+    const center = curve.getPoint(t);
+    const taper = THREE.MathUtils.lerp(1.25, 0.45, t);
+    pos.setX(i, center.x + (pos.getX(i) - center.x) * taper);
+    pos.setZ(i, center.z + (pos.getZ(i) - center.z) * taper);
+  }
+  trunkGeo.computeVertexNormals();
+
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+  trunk.castShadow = true;
+  g.add(trunk);
+
+  // Crown of graceful arched fronds
   const crown = new THREE.Group();
-  crown.position.set(0, curY, curZ);
-  const frondCount = 7;
+  crown.position.set(0, height, leanDist);
+  const frondCount = 8;
   for (let f = 0; f < frondCount; f++) {
-    const fg = new THREE.Group();
-    fg.rotation.y = (f / frondCount) * Math.PI * 2 + rand() * 0.25;
-    const blade = new THREE.Mesh(new THREE.ConeGeometry(0.95, 5.4, 4), frondMat);
-    blade.scale.set(1.0, 1.0, 0.16);
-    blade.rotation.x = Math.PI * 0.62;
-    blade.position.set(0, -0.35, 2.35);
-    fg.add(blade);
-    crown.add(fg);
+    const frond = new THREE.Mesh(curvedFrondGeo, frondMat);
+    frond.rotation.y = (f / frondCount) * Math.PI * 2 + rand() * 0.25;
+    frond.rotation.x = -0.15 + (f % 2) * 0.22;
+    crown.add(frond);
   }
   g.add(crown);
   return g;
@@ -305,15 +437,14 @@ function createPalmTree(trunkMat, frondMat, height, rand) {
 
 function buildDistantSkyline(parent) {
   const skyline = new THREE.Group();
-  const matA = new THREE.MeshStandardMaterial({ color: 0xb7cedb, roughness: 0.7 });
-  const matB = new THREE.MeshStandardMaterial({ color: 0x99b7c9, roughness: 0.75 });
+  const matA = new THREE.MeshStandardMaterial({ color: 0xc2d8e4, roughness: 0.65 });
+  const matB = new THREE.MeshStandardMaterial({ color: 0xa4c2d4, roughness: 0.72 });
 
-  // Place Miami/Vice-style coastal towers far across the northern horizon
   for (let i = 0; i < 42; i++) {
     const angle = -Math.PI * 0.72 + (i / 42) * Math.PI * 0.55;
-    const dist = 1020 + (i % 4) * 55;
-    const h = 24 + Math.abs(Math.sin(i * 1.9)) * 74 + (i % 7 === 0 ? 35 : 0);
-    const w = 14 + (i % 5) * 6;
+    const dist = 1040 + (i % 4) * 55;
+    const h = 24 + Math.abs(Math.sin(i * 1.9)) * 72 + (i % 7 === 0 ? 36 : 0);
+    const w = 13 + (i % 5) * 5;
     const tower = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.8), i % 2 === 0 ? matA : matB);
     tower.position.set(Math.cos(angle) * dist, h * 0.5 - 3, Math.sin(angle) * dist);
     skyline.add(tower);
@@ -321,40 +452,75 @@ function buildDistantSkyline(parent) {
   parent.add(skyline);
 }
 
+/**
+ * Builds smooth curved pointed-bow hull geometry for NPC sailboats & yachts (zero rectangular boxes!).
+ */
+function buildCurvedVesselHullGeo(length, beam, depth) {
+  const hl = length * 0.5;
+  const hb = beam * 0.5;
+  const shape = new THREE.Shape();
+  shape.moveTo(-hb * 0.82, hl);
+  shape.quadraticCurveTo(-hb * 1.05, 0, -hb * 0.65, -hl * 0.55);
+  shape.quadraticCurveTo(-hb * 0.25, -hl * 0.92, 0, -hl);
+  shape.quadraticCurveTo(hb * 0.25, -hl * 0.92, hb * 0.65, -hl * 0.55);
+  shape.quadraticCurveTo(hb * 1.05, 0, hb * 0.82, hl);
+  shape.closePath();
+
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: true,
+    bevelThickness: 0.28,
+    bevelSize: 0.22,
+    bevelSegments: 4,
+    curveSegments: 20
+  });
+  geo.rotateX(Math.PI * 0.5);
+  return geo;
+}
+
 function buildNpcVessels(parent) {
   const vessels = [];
-  const hullWhite = new THREE.MeshStandardMaterial({ color: 0xf2f5f7, roughness: 0.35 });
-  const hullNavy = new THREE.MeshStandardMaterial({ color: 0x1d3548, roughness: 0.42 });
-  const woodDeck = new THREE.MeshStandardMaterial({ color: 0x8d6c49, roughness: 0.85 });
-  const glassDark = new THREE.MeshStandardMaterial({ color: 0x1b2c38, roughness: 0.15, metalness: 0.5 });
-  const mastMat = new THREE.MeshStandardMaterial({ color: 0x454d55, roughness: 0.5 });
-  const sailMat = new THREE.MeshStandardMaterial({ color: 0xf7f5ee, roughness: 0.85, side: THREE.DoubleSide });
+  const hullWhite = new THREE.MeshPhysicalMaterial({ color: 0xf4f7f9, roughness: 0.2, clearcoat: 0.85 });
+  const hullNavy = new THREE.MeshPhysicalMaterial({ color: 0x1b3449, roughness: 0.24, clearcoat: 0.8 });
+  const woodDeck = new THREE.MeshStandardMaterial({ color: 0x94734f, roughness: 0.82 });
+  const glassDark = new THREE.MeshPhysicalMaterial({ color: 0x172936, roughness: 0.08, metalness: 0.25, clearcoat: 1.0 });
+  const mastMat = new THREE.MeshStandardMaterial({ color: 0x454e56, roughness: 0.4, metalness: 0.5 });
+  const sailMat = new THREE.MeshStandardMaterial({ color: 0xf8f6f0, roughness: 0.82, side: THREE.DoubleSide });
+
+  const sailHullGeo = buildCurvedVesselHullGeo(14.5, 3.8, 1.25);
+  const yachtHullGeo = buildCurvedVesselHullGeo(15.2, 4.4, 1.55);
 
   function makeSailboat(withSailsUp) {
     const g = new THREE.Group();
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.35, 13.5), hullNavy);
-    hull.position.y = 0.55;
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.25, 13.2), woodDeck);
-    deck.position.y = 1.28;
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 5.2), hullWhite);
-    cabin.position.set(0, 1.75, 0.5);
-    // Tall mast (iconic silhouette on right horizon in screenshot!)
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.16, 19.5, 8), mastMat);
-    mast.position.set(0, 10.6, -0.5);
-    const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 6.2, 8), mastMat);
+    const hull = new THREE.Mesh(sailHullGeo, hullNavy);
+    hull.position.y = 1.28;
+    const deck = new THREE.Mesh(buildCurvedVesselHullGeo(13.6, 3.3, 0.14), woodDeck);
+    deck.position.y = 1.48;
+    const cabin = new THREE.Mesh(buildCurvedVesselHullGeo(5.8, 2.2, 0.72), hullWhite);
+    cabin.position.set(0, 2.15, 0.5);
+
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.15, 20.0, 14), mastMat);
+    mast.position.set(0, 10.8, -0.5);
+    const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 6.2, 10), mastMat);
     boom.rotation.x = Math.PI * 0.5;
     boom.position.set(0, 3.2, 2.6);
     g.add(hull, deck, cabin, mast, boom);
 
     if (withSailsUp) {
-      const sailShape = new THREE.Shape();
-      sailShape.moveTo(0, 0);
-      sailShape.lineTo(0, 15.5);
-      sailShape.lineTo(5.8, 0.4);
-      sailShape.closePath();
-      const sail = new THREE.Mesh(new THREE.ShapeGeometry(sailShape), sailMat);
-      sail.rotation.y = -Math.PI * 0.5;
-      sail.position.set(0.08, 3.3, -0.4);
+      // Gently billowing curved mainsail
+      const sailGeo = new THREE.PlaneGeometry(5.8, 15.6, 8, 12);
+      const pos = sailGeo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i) + 2.9; // 0..5.8
+        const y = pos.getY(i) + 7.8; // 0..15.6
+        const maxW = Math.max(0.05, 5.8 * (1 - y / 15.8));
+        const clampedX = Math.min(x, maxW);
+        const billow = Math.sin((clampedX / maxW) * Math.PI) * Math.sin((y / 15.6) * Math.PI) * 0.9;
+        pos.setXYZ(i, billow, y, clampedX);
+      }
+      sailGeo.computeVertexNormals();
+      const sail = new THREE.Mesh(sailGeo, sailMat);
+      sail.position.set(0.05, 3.3, -0.45);
       g.add(sail);
     }
     return g;
@@ -362,35 +528,37 @@ function buildNpcVessels(parent) {
 
   function makeMotorYacht() {
     const g = new THREE.Group();
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.7, 14.2), hullWhite);
-    hull.position.y = 0.72;
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(4.26, 0.35, 13.8), hullNavy);
-    stripe.position.y = 0.35;
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.65, 7.2), hullWhite);
-    cabin.position.set(0, 2.35, 0.4);
-    const windows = new THREE.Mesh(new THREE.BoxGeometry(3.48, 0.65, 6.0), glassDark);
-    windows.position.set(0, 2.55, 0.1);
-    const flybridge = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.85, 3.8), hullWhite);
-    flybridge.position.set(0, 3.55, 1.1);
-    g.add(hull, stripe, cabin, windows, flybridge);
+    const hull = new THREE.Mesh(yachtHullGeo, hullWhite);
+    hull.position.y = 1.55;
+
+    const cabin = new THREE.Mesh(buildCurvedVesselHullGeo(8.2, 3.4, 1.35), hullWhite);
+    cabin.position.set(0, 2.85, 0.4);
+
+    const windows = new THREE.Mesh(buildCurvedVesselHullGeo(6.8, 3.48, 0.55), glassDark);
+    windows.position.set(0, 2.65, 0.1);
+
+    const flybridge = new THREE.Mesh(buildCurvedVesselHullGeo(4.4, 2.5, 0.68), hullWhite);
+    flybridge.position.set(0, 3.65, 1.1);
+
+    g.add(hull, cabin, windows, flybridge);
     return g;
   }
 
-  // 1. Anchored tall-masted sailboat on right side (mirrors screenshot right horizon!)
+  // 1. Anchored tall-masted sailboat on right horizon (mirrors screenshot!)
   const heroSail = makeSailboat(false);
   heroSail.position.set(112, 0, -148);
   heroSail.rotation.y = Math.PI * 0.46;
   parent.add(heroSail);
-  vessels.push({ mesh: heroSail, orbitRadius: 0, centerX: 112, centerZ: -148, angle: 0, orbitSpeed: 0, draftOffset: -0.15 });
+  vessels.push({ mesh: heroSail, orbitRadius: 0, centerX: 112, centerZ: -148, angle: 0, orbitSpeed: 0, draftOffset: -0.25 });
 
-  // 2. Anchored white motor yacht near left mangrove island (mirrors screenshot left island!)
+  // 2. Anchored motor yacht near left mangrove island
   const heroYacht = makeMotorYacht();
   heroYacht.position.set(-96, 0, -162);
   heroYacht.rotation.y = -0.5;
   parent.add(heroYacht);
-  vessels.push({ mesh: heroYacht, orbitRadius: 0, centerX: -96, centerZ: -162, angle: 0, orbitSpeed: 0, draftOffset: -0.25 });
+  vessels.push({ mesh: heroYacht, orbitRadius: 0, centerX: -96, centerZ: -162, angle: 0, orbitSpeed: 0, draftOffset: -0.35 });
 
-  // 3. Cruising sailboats & yachts across the open bay
+  // 3. Cruising sailboats & yachts
   const patrolConfigs = [
     { type: 'sail', cx: 140, cz: -310, r: 95, speed: 0.045, a: 0.8 },
     { type: 'yacht', cx: -190, cz: 45, r: 110, speed: -0.055, a: 2.1 },
@@ -410,7 +578,7 @@ function buildNpcVessels(parent) {
       centerZ: cfg.cz,
       angle: cfg.a,
       orbitSpeed: cfg.speed,
-      draftOffset: -0.2
+      draftOffset: -0.25
     });
   }
 
@@ -419,9 +587,9 @@ function buildNpcVessels(parent) {
 
 function buildChannelBuoys(parent) {
   const buoys = [];
-  const redMat = new THREE.MeshStandardMaterial({ color: 0xe63946, roughness: 0.4 });
-  const greenMat = new THREE.MeshStandardMaterial({ color: 0x22b573, roughness: 0.4 });
-  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf4f7fa, roughness: 0.5 });
+  const redMat = new THREE.MeshPhysicalMaterial({ color: 0xe63946, roughness: 0.35, clearcoat: 0.5 });
+  const greenMat = new THREE.MeshPhysicalMaterial({ color: 0x22b573, roughness: 0.35, clearcoat: 0.5 });
+  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf4f7fa, roughness: 0.45 });
 
   const positions = [
     { x: -38, z: -118, red: true },
@@ -436,12 +604,12 @@ function buildChannelBuoys(parent) {
 
   for (const p of positions) {
     const g = new THREE.Group();
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.05, 1.4, 12), p.red ? redMat : greenMat);
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 1.05, 1.4, 20), p.red ? redMat : greenMat);
     base.position.y = 0.35;
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 2.5, 8), whiteMat);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 2.5, 14), whiteMat);
     pole.position.y = 1.9;
     const top = new THREE.Mesh(
-      p.red ? new THREE.ConeGeometry(0.45, 0.85, 8) : new THREE.BoxGeometry(0.7, 0.7, 0.7),
+      p.red ? new THREE.ConeGeometry(0.45, 0.85, 16) : new THREE.CylinderGeometry(0.36, 0.36, 0.72, 16),
       p.red ? redMat : greenMat
     );
     top.position.y = 3.35;
@@ -455,9 +623,9 @@ function buildChannelBuoys(parent) {
 
 function buildJumpRamps(parent) {
   const ramps = [];
-  const deckMat = new THREE.MeshStandardMaterial({ color: 0xd9a76a, roughness: 0.78 });
-  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xff3b93, roughness: 0.45 });
-  const floatMat = new THREE.MeshStandardMaterial({ color: 0x28323c, roughness: 0.6 });
+  const deckMat = new THREE.MeshStandardMaterial({ color: 0xd9a76a, roughness: 0.74 });
+  const stripeMat = new THREE.MeshPhysicalMaterial({ color: 0xff3b93, roughness: 0.35, clearcoat: 0.6 });
+  const floatMat = new THREE.MeshStandardMaterial({ color: 0x26303a, roughness: 0.5 });
 
   const specs = [
     { x: 12, z: -145, rotY: 0.12 },
@@ -471,22 +639,20 @@ function buildJumpRamps(parent) {
     g.position.set(s.x, 0, s.z);
     g.rotation.y = s.rotY;
 
-    // Sloped ramp deck (10m wide, 14m long, rises from y=0 to y=2.8m toward -Z)
-    const rampDeck = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.45, 14.5), deckMat);
+    const rampDeck = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.42, 14.5), deckMat);
     rampDeck.position.set(0, 1.35, 0);
     rampDeck.rotation.x = 0.21;
     rampDeck.castShadow = true;
     rampDeck.receiveShadow = true;
     g.add(rampDeck);
 
-    // High-visibility magenta racing chevrons on sides
     for (const sx of [-5.1, 5.1]) {
-      const sideTrim = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.65, 14.5), stripeMat);
-      sideTrim.position.set(sx, 1.45, 0);
-      sideTrim.rotation.x = 0.21;
+      const sideTrim = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 14.2, 8, 12), stripeMat);
+      sideTrim.rotation.x = Math.PI * 0.5 + 0.21;
+      sideTrim.position.set(sx, 1.48, 0);
       g.add(sideTrim);
 
-      const pontoon = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 14.8, 10), floatMat);
+      const pontoon = new THREE.Mesh(new THREE.CapsuleGeometry(0.54, 14.2, 8, 16), floatMat);
       pontoon.rotation.x = Math.PI * 0.5;
       pontoon.position.set(sx * 0.94, 0.0, 0);
       g.add(pontoon);
@@ -508,19 +674,17 @@ function buildJumpRamps(parent) {
 function buildCheckpointMarker() {
   const group = new THREE.Group();
 
-  // Wide glowing magenta ring skimming the water surface
   const ringMat = new THREE.MeshBasicMaterial({
     color: 0xff3b93,
     transparent: true,
     opacity: 0.85,
     side: THREE.DoubleSide
   });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(11.5, 13.4, 48), ringMat);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(11.5, 13.4, 64), ringMat);
   ring.rotation.x = -Math.PI * 0.5;
   ring.position.y = 0.65;
   group.add(ring);
 
-  // Subtle vertical translucent beacon cylinder
   const beamMat = new THREE.MeshBasicMaterial({
     color: 0xff4ca0,
     transparent: true,
@@ -528,11 +692,10 @@ function buildCheckpointMarker() {
     side: THREE.DoubleSide,
     depthWrite: false
   });
-  const beam = new THREE.Mesh(new THREE.CylinderGeometry(12.2, 12.2, 18, 32, 1, true), beamMat);
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(12.2, 12.2, 18, 48, 1, true), beamMat);
   beam.position.y = 9.0;
   group.add(beam);
 
-  // Floating 3D pink diamond/chevron beacon above the ring
   const chevron = new THREE.Mesh(
     new THREE.OctahedronGeometry(2.1, 0),
     new THREE.MeshBasicMaterial({ color: 0xff3898 })

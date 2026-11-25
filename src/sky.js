@@ -4,20 +4,20 @@ export const TIME_PRESETS = {
   noon: {
     label: 'Sun: Noon',
     sunDir: new THREE.Vector3(0.32, 0.44, -0.84).normalize(),
-    zenith: new THREE.Color('#134d92'),
-    midSky: new THREE.Color('#4a95cf'),
-    horizon: new THREE.Color('#d2ebf2'),
+    zenith: new THREE.Color('#104a8e'),
+    midSky: new THREE.Color('#4793d0'),
+    horizon: new THREE.Color('#d6eef5'),
     cloudLight: new THREE.Color('#ffffff'),
-    cloudShadow: new THREE.Color('#667e99'),
-    sunColor: new THREE.Color('#fff9e6'),
-    fogColor: new THREE.Color('#b8dfe9'),
-    waterDeep: new THREE.Color('#095c72'),
-    waterShallow: new THREE.Color('#1db7ba'),
-    waterSss: new THREE.Color('#34e4d6'),
-    hemiSky: 0x9edbff,
-    hemiGround: 0x167884,
-    dirIntensity: 2.8,
-    ambientIntensity: 0.72
+    cloudShadow: new THREE.Color('#6a829e'),
+    sunColor: new THREE.Color('#fff9e8'),
+    fogColor: new THREE.Color('#bfe2ec'),
+    waterDeep: new THREE.Color('#07586f'),
+    waterShallow: new THREE.Color('#19b4b8'),
+    waterSss: new THREE.Color('#32e8d9'),
+    hemiSky: 0xa6dfff,
+    hemiGround: 0x16808a,
+    dirIntensity: 2.9,
+    ambientIntensity: 0.78
   },
   sunset: {
     label: 'Sun: Sunset',
@@ -35,7 +35,7 @@ export const TIME_PRESETS = {
     hemiSky: 0xffc694,
     hemiGround: 0x1a5366,
     dirIntensity: 2.5,
-    ambientIntensity: 0.65
+    ambientIntensity: 0.68
   },
   dusk: {
     label: 'Sun: Vice Dusk',
@@ -53,7 +53,7 @@ export const TIME_PRESETS = {
     hemiSky: 0xd98cff,
     hemiGround: 0x123e5c,
     dirIntensity: 1.9,
-    ambientIntensity: 0.62
+    ambientIntensity: 0.64
   }
 };
 
@@ -66,6 +66,7 @@ const SKY_VERT = /* glsl */ `
   }
 `;
 
+// True 2D Simplex noise — completely isotropic & smooth with zero square grid artifacts
 const SKY_FRAG = /* glsl */ `
   uniform vec3 uSunDir;
   uniform vec3 uZenith;
@@ -78,29 +79,46 @@ const SKY_FRAG = /* glsl */ `
 
   varying vec3 vWorldDir;
 
-  float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-  }
+  vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }
 
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
-      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-      u.y
+  float snoise(vec2 v) {
+    const vec4 C = vec4(
+      0.211324865405187,
+      0.366025403784439,
+      -0.577350269189626,
+      0.024390243902439
     );
+    vec2 i = floor(v + dot(v, C.yy));
+    vec2 x0 = v - i + dot(i, C.xx);
+    vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    vec4 x12 = x0.xyxy + C.xxzz;
+    x12.xy -= i1;
+    i = mod289(i);
+    vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+    vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+    m = m * m;
+    m = m * m;
+    vec3 x = 2.0 * fract(p * C.www) - 1.0;
+    vec3 h = abs(x) - 0.5;
+    vec3 ox = floor(x + 0.5);
+    vec3 a0 = x - ox;
+    m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+    vec3 g;
+    g.x = a0.x * x0.x + h.x * x0.y;
+    g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+    return 130.0 * dot(m, g) * 0.5 + 0.5;
   }
 
   float fbm(vec2 p) {
     float v = 0.0;
     float a = 0.52;
     mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
-    for (int i = 0; i < 5; i++) {
-      v += a * noise(p);
-      p = rot * p * 2.03 + vec2(17.1, 31.7);
-      a *= 0.50;
+    for (int i = 0; i < 6; i++) {
+      v += a * snoise(p);
+      p = rot * p * 2.04 + vec2(13.7, -9.3);
+      a *= 0.49;
     }
     return v;
   }
@@ -113,52 +131,49 @@ const SKY_FRAG = /* glsl */ `
     vec3 col = mix(uHorizon, uMidSky, smoothstep(0.0, 0.28, y));
     col = mix(col, uZenith, smoothstep(0.22, 0.86, y));
 
-    // Horizon atmospheric haze band
-    float haze = pow(max(1.0 - y, 0.0001), 7.0);
-    col = mix(col, uHorizon * 1.05, haze * 0.68);
+    // Soft atmospheric horizon haze
+    float haze = pow(max(1.0 - y, 0.0001), 6.5);
+    col = mix(col, uHorizon * 1.04, haze * 0.72);
 
-    // Sun glow & crisp disc
+    // Blazing sun disc & smooth atmospheric corona
     float sunDot = max(dot(dir, normalize(uSunDir)), 0.0001);
-    float sunHalo = pow(sunDot, 10.0) * 0.34 + pow(sunDot, 90.0) * 0.72;
-    float sunDisc = smoothstep(0.9986, 0.99945, sunDot);
-    col += uSunColor * (sunHalo + sunDisc * 2.8);
+    float sunGlowWide = pow(sunDot, 7.0) * 0.28;
+    float sunGlowMid = pow(sunDot, 64.0) * 0.72;
+    float sunDisc = smoothstep(0.9984, 0.99945, sunDot);
+    col += uSunColor * (sunGlowWide + sunGlowMid + sunDisc * 3.0);
 
-    // Towering tropical cumulus cloud banks around horizon & mid-sky
+    // Billowy, organic cumulus cloud banks (zero grid artifacts)
     if (dir.y > -0.02) {
-      float elev = max(dir.y, 0.025);
-      // Project onto a gently curved dome so clouds look huge near the horizon
-      vec2 cloudUV = dir.xz / (elev + 0.24) * 1.05;
-      cloudUV += vec2(uTime * 0.0045, uTime * 0.002);
+      float elev = max(dir.y, 0.03);
+      vec2 cloudUV = dir.xz / (elev + 0.26) * 0.78;
+      cloudUV += vec2(uTime * 0.0038, uTime * 0.0018);
 
-      float baseNoise = fbm(cloudUV * 1.15);
-      float detail = fbm(cloudUV * 2.8 + vec2(4.2, -2.7));
-      float wisps = fbm(cloudUV * 5.2 - vec2(uTime * 0.006, 1.3));
+      // Domain warp for fluffy billowing cumulus lobes
+      vec2 warp = vec2(fbm(cloudUV * 1.2 + 2.1), fbm(cloudUV * 1.2 - 3.4));
+      float base = fbm(cloudUV * 0.95 + warp * 0.35);
+      float puffs = fbm(cloudUV * 2.2 - warp * 0.22);
+      float density = base * 0.68 + puffs * 0.32;
 
-      // Emphasize big cumulus banks between 3 deg and 38 deg elevation (like screenshot)
-      float band = smoothstep(0.0, 0.075, dir.y) * (1.0 - smoothstep(0.32, 0.74, dir.y));
-      float highCloud = smoothstep(0.18, 0.55, dir.y) * 0.38;
+      float band = smoothstep(0.0, 0.07, dir.y) * (1.0 - smoothstep(0.30, 0.76, dir.y));
+      float highWisp = smoothstep(0.18, 0.58, dir.y) * 0.35;
+      float threshold = mix(0.45, 0.58, smoothstep(0.05, 0.52, dir.y));
+      float cloudMask = smoothstep(threshold, threshold + 0.22, density) * (band + highWisp);
+      cloudMask = clamp(cloudMask, 0.0, 1.0);
 
-      float density = baseNoise * 0.72 + detail * 0.28;
-      float coverage = mix(0.42, 0.56, smoothstep(0.05, 0.5, dir.y));
-      float cloudMask = smoothstep(coverage, coverage + 0.24, density) * (band + highCloud);
-      cloudMask = clamp(cloudMask + smoothstep(0.62, 0.82, wisps) * band * 0.25, 0.0, 1.0);
-
-      // Directional self-shadowing: sample slightly toward sun
+      // Multi-sample directional sunlight & dark puffy cloud underbelly
       vec2 sunStep = normalize(uSunDir.xz + vec2(0.0001)) * 0.14;
-      float litSample = fbm((cloudUV + sunStep) * 1.15) * 0.72 + fbm((cloudUV + sunStep) * 2.8 + vec2(4.2, -2.7)) * 0.28;
-      float lighting = clamp(0.62 + (density - litSample) * 2.8 + smoothstep(0.04, 0.32, dir.y) * 0.25, 0.0, 1.0);
-      // Silver lining near sun
-      float silver = pow(sunDot, 8.0) * 0.45;
+      float dSun = fbm((cloudUV + sunStep) * 0.95 + warp * 0.35) * 0.68 +
+                   fbm((cloudUV + sunStep) * 2.2 - warp * 0.22) * 0.32;
+      float selfShadow = clamp(0.58 + (density - dSun) * 3.2 + smoothstep(0.04, 0.34, dir.y) * 0.28, 0.0, 1.0);
+      float silverLining = pow(sunDot, 10.0) * 0.42 * (1.0 - cloudMask * 0.45);
 
-      vec3 cloudCol = mix(uCloudShadow, uCloudLight, lighting);
-      cloudCol += uSunColor * silver;
-      // Blend distant horizon clouds subtly into mist
+      vec3 cloudCol = mix(uCloudShadow, uCloudLight, selfShadow);
+      cloudCol += uSunColor * silverLining;
       cloudCol = mix(uHorizon, cloudCol, smoothstep(0.01, 0.14, dir.y));
 
-      col = mix(col, cloudCol, cloudMask * 0.94);
+      col = mix(col, cloudCol, cloudMask * 0.95);
     }
 
-    // Subtle below-horizon water bounce color
     if (dir.y < 0.0) {
       col = mix(uHorizon, uMidSky * 0.5, clamp(-dir.y * 5.0, 0.0, 1.0));
     }
@@ -168,7 +183,7 @@ const SKY_FRAG = /* glsl */ `
 `;
 
 export function createSkySystem(scene) {
-  const skyGeo = new THREE.SphereGeometry(2900, 48, 32);
+  const skyGeo = new THREE.SphereGeometry(2900, 64, 40);
   const preset = TIME_PRESETS.noon;
 
   const skyMat = new THREE.ShaderMaterial({
@@ -209,11 +224,11 @@ export function createSkySystem(scene) {
   sunLight.shadow.camera.right = d;
   sunLight.shadow.camera.top = d;
   sunLight.shadow.camera.bottom = -d;
-  sunLight.shadow.bias = -0.0005;
+  sunLight.shadow.bias = -0.0004;
   scene.add(sunLight);
   scene.add(sunLight.target);
 
-  // Seabirds gliding across the tropical sky
+  // Smooth soaring seabirds
   const birds = createSeabirds(scene);
 
   function applyPreset(name) {
@@ -243,7 +258,6 @@ export function createSkySystem(scene) {
     skyMat.uniforms.uTime.value = time;
     skyMesh.position.set(focusPos.x, 0, focusPos.z);
 
-    // Keep shadow frustum centered around player boat
     sunLight.target.position.set(focusPos.x, 0, focusPos.z);
     sunLight.position
       .copy(p.sunDir)
@@ -260,38 +274,36 @@ function createSeabirds(scene) {
   const birdGroup = new THREE.Group();
   const birds = [];
   const wingMat = new THREE.MeshStandardMaterial({
-    color: 0xf4f7fa,
-    roughness: 0.7,
-    side: THREE.DoubleSide
-  });
-  const tipMat = new THREE.MeshStandardMaterial({
-    color: 0x26313c,
-    roughness: 0.8,
+    color: 0xf4f8fa,
+    roughness: 0.65,
     side: THREE.DoubleSide
   });
 
-  for (let i = 0; i < 16; i++) {
+  // Curved gull wing shape instead of rectangular box
+  const wingShape = new THREE.Shape();
+  wingShape.moveTo(0, 0.14);
+  wingShape.quadraticCurveTo(0.45, 0.22, 1.08, -0.06);
+  wingShape.quadraticCurveTo(0.55, -0.14, 0, -0.14);
+  wingShape.closePath();
+  const rightWingGeo = new THREE.ShapeGeometry(wingShape, 8);
+  rightWingGeo.rotateX(-Math.PI * 0.5);
+
+  const leftWingGeo = rightWingGeo.clone();
+  leftWingGeo.scale(-1, 1, 1);
+
+  const bodyGeo = new THREE.CapsuleGeometry(0.11, 0.55, 6, 10);
+  bodyGeo.rotateX(Math.PI * 0.5);
+
+  for (let i = 0; i < 14; i++) {
     const g = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.9, 5), wingMat);
-    body.rotation.x = Math.PI * 0.5;
+    const body = new THREE.Mesh(bodyGeo, wingMat);
     g.add(body);
 
-    const leftWing = new THREE.Group();
-    const lwInner = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.04, 0.34), wingMat);
-    lwInner.position.x = -0.42;
-    const lwTip = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.03, 0.22), tipMat);
-    lwTip.position.x = -0.95;
-    leftWing.add(lwInner, lwTip);
-
-    const rightWing = new THREE.Group();
-    const rwInner = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.04, 0.34), wingMat);
-    rwInner.position.x = 0.42;
-    const rwTip = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.03, 0.22), tipMat);
-    rwTip.position.x = 0.95;
-    rightWing.add(rwInner, rwTip);
-
+    const leftWing = new THREE.Mesh(leftWingGeo, wingMat);
+    const rightWing = new THREE.Mesh(rightWingGeo, wingMat);
     g.add(leftWing, rightWing);
-    const scale = 0.8 + (i % 4) * 0.22;
+
+    const scale = 0.85 + (i % 4) * 0.22;
     g.scale.setScalar(scale);
 
     birdGroup.add(g);
@@ -299,11 +311,11 @@ function createSeabirds(scene) {
       mesh: g,
       leftWing,
       rightWing,
-      angle: (i / 16) * Math.PI * 2,
-      radius: 55 + (i % 5) * 38,
-      altitude: 18 + (i % 6) * 7,
-      speed: 0.12 + (i % 4) * 0.045,
-      flapSpeed: 4.5 + (i % 3) * 1.1,
+      angle: (i / 14) * Math.PI * 2,
+      radius: 58 + (i % 5) * 40,
+      altitude: 19 + (i % 6) * 7,
+      speed: 0.11 + (i % 4) * 0.04,
+      flapSpeed: 4.2 + (i % 3) * 0.9,
       phase: i * 1.7
     });
   }
@@ -316,11 +328,11 @@ function createSeabirds(scene) {
         const a = b.angle + time * b.speed;
         const cx = focusPos.x + Math.cos(a) * b.radius;
         const cz = focusPos.z + Math.sin(a) * b.radius;
-        const cy = b.altitude + Math.sin(time * 0.9 + b.phase) * 2.4;
+        const cy = b.altitude + Math.sin(time * 0.85 + b.phase) * 2.4;
 
         b.mesh.position.set(cx, cy, cz);
         b.mesh.rotation.y = -a;
-        const flap = Math.sin(time * b.flapSpeed + b.phase) * 0.45;
+        const flap = Math.sin(time * b.flapSpeed + b.phase) * 0.42;
         b.leftWing.rotation.z = flap;
         b.rightWing.rotation.z = -flap;
       }

@@ -34,6 +34,59 @@ const boat = createSpeedboat(scene);
 const audio = new BoatAudio();
 const hud = createHud();
 
+// Procedural PMREM sky/ocean environment map so fiberglass, chrome & black outboards have realistic reflections!
+const pmrem = new THREE.PMREMGenerator(renderer);
+let currentEnvRT = null;
+
+function rebuildEnvironmentMap(presetKey) {
+  const p = TIME_PRESETS[presetKey] || TIME_PRESETS.noon;
+  const envScene = new THREE.Scene();
+  const envGeo = new THREE.SphereGeometry(40, 32, 20);
+  const envMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+      uZenith: { value: p.zenith },
+      uHorizon: { value: p.horizon },
+      uWater: { value: p.waterShallow },
+      uSunDir: { value: p.sunDir },
+      uSunColor: { value: p.sunColor }
+    },
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uZenith;
+      uniform vec3 uHorizon;
+      uniform vec3 uWater;
+      uniform vec3 uSunDir;
+      uniform vec3 uSunColor;
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        vec3 col = d.y >= 0.0
+          ? mix(uHorizon, uZenith, pow(max(d.y, 0.0001), 0.55))
+          : mix(uHorizon, uWater, pow(max(-d.y, 0.0001), 0.45));
+        float s = pow(max(dot(d, normalize(uSunDir)), 0.0001), 42.0);
+        col += uSunColor * s * 2.5;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `
+  });
+  envScene.add(new THREE.Mesh(envGeo, envMat));
+  const nextRT = pmrem.fromScene(envScene, 0.04);
+  if (currentEnvRT) currentEnvRT.dispose();
+  currentEnvRT = nextRT;
+  scene.environment = nextRT.texture;
+  envGeo.dispose();
+  envMat.dispose();
+}
+
+rebuildEnvironmentMap('noon');
+
 // --- Game & Boat State ---
 const CAMERA_MODES = ['Chase', 'Close', 'Helm', 'Orbit'];
 const TIME_KEYS = ['noon', 'sunset', 'dusk'];
@@ -208,6 +261,7 @@ function cycleTime() {
   const key = TIME_KEYS[state.timeIdx];
   const p = sky.applyPreset(key);
   ocean.applyPreset(key);
+  rebuildEnvironmentMap(key);
   btnTime.textContent = p.label;
 }
 
