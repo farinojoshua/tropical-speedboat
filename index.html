@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Leonida Keys — Tropical Speedboat</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="game-root">
+      <canvas id="game-canvas"></canvas>
+
+      <!-- Floating screen-space pink waypoint chevron (matches screenshot) -->
+      <div id="waypoint-marker" class="waypoint-marker hidden">
+        <div class="waypoint-chevron"></div>
+        <span id="waypoint-dist" class="waypoint-dist">240m</span>
+      </div>
+
+      <!-- Checkpoint toast notification -->
+      <div id="toast" class="toast hidden"></div>
+
+      <!-- Top-left compact HUD controls -->
+      <div class="top-bar">
+        <div class="pill mode-pill" id="mode-display">
+          <span class="dot pink"></span>
+          <span id="mode-label">ISLAND RUN</span>
+          <span class="sep">•</span>
+          <span id="cp-counter">0 / 12</span>
+          <span class="sep">•</span>
+          <span id="timer-display">00:00.0</span>
+        </div>
+
+        <div class="top-actions">
+          <button class="hud-btn" id="btn-mode" title="Switch Mode (M)">Mode: Run</button>
+          <button class="hud-btn" id="btn-camera" title="Switch Camera (C)">Cam: Chase</button>
+          <button class="hud-btn" id="btn-time" title="Time of Day (T)">Sun: Noon</button>
+          <button class="hud-btn" id="btn-audio" title="Toggle Audio (V)">SFX: On</button>
+        </div>
+      </div>
+
+      <!-- Bottom-left GTA-style translucent turquoise minimap -->
+      <div class="minimap-wrap" id="minimap-wrap">
+        <canvas id="minimap-canvas" width="240" height="156"></canvas>
+        <div id="minimap-north" class="minimap-north">N</div>
+        <div id="minimap-wp-edge" class="minimap-wp-edge hidden"></div>
+      </div>
+
+      <!-- Bottom-right clean marine speed & nitro gauge -->
+      <div class="speed-cluster">
+        <div class="speed-readout">
+          <span id="speed-value">0</span>
+          <span class="speed-unit">KTS</span>
+        </div>
+        <div class="boost-row">
+          <span class="boost-label">BOOST</span>
+          <div class="boost-track">
+            <div id="boost-fill" class="boost-fill"></div>
+          </div>
+        </div>
+        <div class="hint-strip">
+          <span>WASD / ↑↓←→ Drive</span>
+          <span>Space Boost</span>
+          <span>C Cam</span>
+          <span>M Mode</span>
+        </div>
+      </div>
+
+      <!-- Start / Title overlay -->
+      <div id="start-overlay" class="start-overlay">
+        <div class="start-card">
+          <div class="badge">LEONIDA KEYS • OPEN WATER</div>
+          <h1>TROPICAL SPEEDBOAT</h1>
+          <p class="subtitle">
+            Drive a twin-outboard center console across turquoise tropical waters. Hit the magenta coastal waypoints or explore the islands freely.
+          </p>
+          <div class="controls-grid">
+            <div><kbd>W</kbd><kbd>S</kbd><span>Throttle / Reverse</span></div>
+            <div><kbd>A</kbd><kbd>D</kbd><span>Steer</span></div>
+            <div><kbd>Space</kbd><span>Twin-V6 Nitro Boost</span></div>
+            <div><kbd>Shift</kbd><span>Sharp Carve Turn</span></div>
+            <div><kbd>Mouse</kbd><span>Drag to Look Around</span></div>
+            <div><kbd>C</kbd> / <kbd>T</kbd><span>Camera / Lighting</span></div>
+          </div>
+          <div class="start-buttons">
+            <button id="btn-start-run" class="btn-primary">Play Island Run</button>
+            <button id="btn-start-free" class="btn-secondary">Free Roam</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Run complete modal -->
+      <div id="finish-overlay" class="start-overlay hidden">
+        <div class="start-card compact">
+          <div class="badge">RUN COMPLETE</div>
+          <h2 id="finish-time">01:24.5</h2>
+          <p id="finish-best" class="subtitle">New Best Time!</p>
+          <div class="start-buttons">
+            <button id="btn-replay" class="btn-primary">Race Again</button>
+            <button id="btn-continue-free" class="btn-secondary">Continue Free Roam</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mobile / Touch controls -->
+      <div class="touch-controls" id="touch-controls">
+        <div class="touch-left">
+          <button class="touch-btn" data-key="left">◀</button>
+          <button class="touch-btn" data-key="right">▶</button>
+        </div>
+        <div class="touch-right">
+          <button class="touch-btn boost-touch" data-key="boost">⚡</button>
+          <button class="touch-btn" data-key="down">▼</button>
+          <button class="touch-btn throttle-touch" data-key="up">▲</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
