@@ -1,4 +1,10 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+
 import { sampleOcean } from './waves.js';
 import { createSkySystem, TIME_PRESETS } from './sky.js';
 import { createOcean } from './ocean.js';
@@ -14,19 +20,20 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance'
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const pixelRatio = Math.min(window.devicePixelRatio, 2);
+renderer.setPixelRatio(pixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+renderer.toneMappingExposure = 1.06;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(TIME_PRESETS.noon.fogColor.clone(), 420, 2150);
+scene.fog = new THREE.Fog(TIME_PRESETS.noon.fogColor.clone(), 430, 2200);
 
-const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.4, 3400);
+const camera = new THREE.PerspectiveCamera(56, window.innerWidth / window.innerHeight, 0.35, 3450);
 
-// --- Build Systems ---
+// --- Build Core Systems ---
 const sky = createSkySystem(scene);
 const world = createWorld(scene);
 const ocean = createOcean(scene, world.islands);
@@ -34,7 +41,7 @@ const boat = createSpeedboat(scene);
 const audio = new BoatAudio();
 const hud = createHud();
 
-// Procedural PMREM sky/ocean environment map so fiberglass, chrome & black outboards have realistic reflections!
+// --- Procedural Tropical Sky & Ocean PMREM Environment Reflections ---
 const pmrem = new THREE.PMREMGenerator(renderer);
 let currentEnvRT = null;
 
@@ -71,7 +78,7 @@ function rebuildEnvironmentMap(presetKey) {
           ? mix(uHorizon, uZenith, pow(max(d.y, 0.0001), 0.55))
           : mix(uHorizon, uWater, pow(max(-d.y, 0.0001), 0.45));
         float s = pow(max(dot(d, normalize(uSunDir)), 0.0001), 42.0);
-        col += uSunColor * s * 2.5;
+        col += uSunColor * s * 2.8;
         gl_FragColor = vec4(col, 1.0);
       }
     `
@@ -84,8 +91,115 @@ function rebuildEnvironmentMap(presetKey) {
   envGeo.dispose();
   envMat.dispose();
 }
-
 rebuildEnvironmentMap('noon');
+
+// --- Cinematic HDR 4x MSAA Post-Processing Pipeline (GTA VI Sun Bloom + Lens Glare + Spray Mist) ---
+const CinematicGradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uSunScreen: { value: new THREE.Vector2(0.72, 0.88) },
+    uSunVisible: { value: 1.0 },
+    uSunColor: { value: TIME_PRESETS.noon.sunColor.clone() },
+    uSprayWet: { value: 0.0 },
+    uTime: { value: 0.0 },
+    uAspect: { value: window.innerWidth / window.innerHeight }
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uSunScreen;
+    uniform float uSunVisible;
+    uniform vec3 uSunColor;
+    uniform float uSprayWet;
+    uniform float uTime;
+    uniform float uAspect;
+    varying vec2 vUv;
+
+    void main() {
+      vec2 uv = vUv;
+
+      // Subtle liquid water-spray refraction on camera lens after big wave landings
+      if (uSprayWet > 0.01) {
+        vec2 dropGrid = uv * vec2(18.0 * uAspect, 18.0) + vec2(0.0, uTime * 1.8);
+        vec2 cell = fract(dropGrid) - 0.5;
+        float r = length(cell);
+        float drop = smoothstep(0.24, 0.06, r) * uSprayWet;
+        uv += cell * drop * 0.018;
+      }
+
+      vec3 col = texture2D(tDiffuse, uv).rgb;
+
+      // Warm cinematic solar lens flare & subtle anamorphic sun halo (matches GTA VI upper-right glare!)
+      if (uSunVisible > 0.01) {
+        vec2 diff = (uv - uSunScreen) * vec2(uAspect, 1.0);
+        float d = length(diff);
+        float sunGlow = exp(-d * 3.8) * 0.16 + exp(-d * 14.0) * 0.22;
+        // Soft anamorphic streak
+        float streak = exp(-abs(uv.y - uSunScreen.y) * 44.0) * exp(-abs(uv.x - uSunScreen.x) * 3.2) * 0.14;
+        // Subtle opposite lens ghost ring
+        vec2 ghostPos = vec2(0.5) - (uSunScreen - vec2(0.5)) * 0.55;
+        float gd = length((uv - ghostPos) * vec2(uAspect, 1.0));
+        float ghost = smoothstep(0.11, 0.075, gd) * smoothstep(0.03, 0.07, gd) * 0.045;
+        col += uSunColor * (sunGlow + streak + ghost) * uSunVisible;
+      }
+
+      // Delicate cinematic vignette & crisp sunny micro-contrast
+      vec2 vCentered = uv - 0.5;
+      float vig = 1.0 - dot(vCentered, vCentered) * 0.24;
+      col *= clamp(vig, 0.78, 1.0);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+};
+
+let composer = null;
+let bloomPass = null;
+let gradePass = null;
+
+try {
+  const isWebGL2 = renderer.capabilities.isWebGL2;
+  const rtParams = {
+    type: isWebGL2 ? THREE.HalfFloatType : THREE.UnsignedByteType,
+    samples: isWebGL2 ? 4 : 0
+  };
+  const renderTarget = new THREE.WebGLRenderTarget(
+    Math.floor(window.innerWidth * pixelRatio),
+    Math.floor(window.innerHeight * pixelRatio),
+    rtParams
+  );
+
+  composer = new EffectComposer(renderer, renderTarget);
+  composer.setPixelRatio(pixelRatio);
+  composer.setSize(window.innerWidth, window.innerHeight);
+
+  const renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+
+  // Subtle calibrated HDR bloom (makes sun, water glitter & pink waypoint glow smoothly!)
+  bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    0.34, // strength
+    0.58, // radius
+    0.94  // threshold (only bright HDR sun/glitter/beacon bloom)
+  );
+  composer.addPass(bloomPass);
+
+  gradePass = new ShaderPass(CinematicGradeShader);
+  composer.addPass(gradePass);
+
+  const outputPass = new OutputPass();
+  composer.addPass(outputPass);
+} catch (err) {
+  console.warn('Post-processing fallback to direct renderer:', err);
+  composer = null;
+}
 
 // --- Game & Boat State ---
 const CAMERA_MODES = ['Chase', 'Close', 'Helm', 'Orbit'];
@@ -93,7 +207,7 @@ const TIME_KEYS = ['noon', 'sunset', 'dusk'];
 
 const state = {
   started: false,
-  mode: 'run', // 'run' | 'free'
+  mode: 'run',
   cameraIdx: 0,
   timeIdx: 0,
 
@@ -101,21 +215,27 @@ const state = {
   pos: new THREE.Vector3(0, 0.25, 0),
   vel: new THREE.Vector3(0, 0, 0),
   vy: 0,
-  yaw: 0, // facing -Z initially (straight into open bay with sun upper-right!)
+  yaw: 0,
   yawVel: 0,
   pitch: 0,
+  pitchVel: 0,
   roll: 0,
+  rollVel: 0,
   steerAngle: 0,
   speed: 0,
   boost: 1.0,
   airborne: false,
 
-  // Camera orbit look
+  // Camera spring & immersion state
   orbitYawOffset: 0,
   orbitPitchOffset: 0,
   isDragging: false,
   lastPointerX: 0,
   lastPointerY: 0,
+  camRoll: 0,
+  camShake: 0,
+  sprayWet: 0,
+  boostLag: 0,
 
   // Island Run progression
   cpIndex: 0,
@@ -123,9 +243,44 @@ const state = {
   bestTime: Number(localStorage.getItem('leonida_best_time') || 0)
 };
 
-// Smooth chase camera state
-const camPosSmooth = new THREE.Vector3(0, 4.4, 12.8);
-const camLookSmooth = new THREE.Vector3(0, 1.4, -18);
+// Critically-damped spring camera states (zero jitter, weighty GTA VI feel!)
+const camPosSmooth = new THREE.Vector3(0, 3.2, 10.6);
+const camPosVel = new THREE.Vector3(0, 0, 0);
+const camLookSmooth = new THREE.Vector3(0, 1.5, -20);
+const camLookVel = new THREE.Vector3(0, 0, 0);
+
+// Critically-damped spring helper (exact analytical exponential decay, frame-rate independent!)
+function smoothDampVec3(current, target, velocity, smoothTime, dt) {
+  const omega = 2.0 / Math.max(0.0001, smoothTime);
+  const x = omega * dt;
+  const exp = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x);
+
+  const cx = current.x - target.x;
+  const cy = current.y - target.y;
+  const cz = current.z - target.z;
+
+  const tx = (velocity.x + omega * cx) * dt;
+  const ty = (velocity.y + omega * cy) * dt;
+  const tz = (velocity.z + omega * cz) * dt;
+
+  velocity.x = (velocity.x - omega * tx) * exp;
+  velocity.y = (velocity.y - omega * ty) * exp;
+  velocity.z = (velocity.z - omega * tz) * exp;
+
+  current.x = target.x + (cx + tx) * exp;
+  current.y = target.y + (cy + ty) * exp;
+  current.z = target.z + (cz + tz) * exp;
+}
+
+function smoothDampScalar(current, target, velRef, smoothTime, dt) {
+  const omega = 2.0 / Math.max(0.0001, smoothTime);
+  const x = omega * dt;
+  const exp = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const change = current - target;
+  const temp = (velRef.v + omega * change) * dt;
+  velRef.v = (velRef.v - omega * temp) * exp;
+  return target + (change + temp) * exp;
+}
 
 // --- Input State ---
 const keys = {
@@ -179,7 +334,6 @@ window.addEventListener('keyup', (e) => {
   bindKey(e.code, false);
 });
 
-// Mouse drag to smoothly look around the boat
 canvas.addEventListener('pointerdown', (e) => {
   state.isDragging = true;
   state.lastPointerX = e.clientX;
@@ -200,7 +354,6 @@ window.addEventListener('pointerup', () => {
   state.isDragging = false;
 });
 
-// Touch controls
 document.querySelectorAll('.touch-btn').forEach((btn) => {
   const k = btn.dataset.key;
   const down = (e) => { e.preventDefault(); keys[k] = true; };
@@ -237,7 +390,9 @@ function resetBoat() {
   state.yaw = 0;
   state.yawVel = 0;
   state.pitch = 0;
+  state.pitchVel = 0;
   state.roll = 0;
+  state.rollVel = 0;
   state.speed = 0;
   state.boost = 1.0;
 }
@@ -262,6 +417,9 @@ function cycleTime() {
   const p = sky.applyPreset(key);
   ocean.applyPreset(key);
   rebuildEnvironmentMap(key);
+  if (gradePass) {
+    gradePass.uniforms.uSunColor.value.copy(p.sunColor);
+  }
   btnTime.textContent = p.label;
 }
 
@@ -297,21 +455,32 @@ btnCamera.addEventListener('click', cycleCamera);
 btnTime.addEventListener('click', cycleTime);
 btnAudio.addEventListener('click', toggleAudio);
 
-// Show first checkpoint immediately in background preview (just like the screenshot!)
 world.setActiveCheckpoint(world.checkpoints[0], true);
 
-// --- Resize Handling ---
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(w, h);
+  if (composer) {
+    composer.setSize(w, h);
+  }
+  if (bloomPass) {
+    bloomPass.resolution.set(w, h);
+  }
+  if (gradePass) {
+    gradePass.uniforms.uAspect.value = w / h;
+  }
 });
 
-// --- Boat Physics & Buoyancy Step ---
+// --- Sub-Stepped Silky Boat Physics & Buoyancy ---
 const forwardVec = new THREE.Vector3();
 const rightVec = new THREE.Vector3();
+const pitchVelRef = { v: 0 };
+const rollVelRef = { v: 0 };
 
-function updateBoatPhysics(dt, time) {
+function stepPhysics(dt, time) {
   let throttle = 0;
   let steerInput = 0;
   let boosting = false;
@@ -330,11 +499,11 @@ function updateBoatPhysics(dt, time) {
       state.boost = Math.min(1, state.boost + dt * 0.14);
     }
   } else {
-    // Gentle scenic idle cruise on the title screen so the wake & waves look alive!
-    throttle = 0.42;
+    // Scenic GTA-style cruising demo on title screen so the wake & waves look alive!
+    throttle = 0.44;
   }
 
-  state.steerAngle = THREE.MathUtils.lerp(state.steerAngle, steerInput, Math.min(1, dt * 8.5));
+  state.steerAngle = THREE.MathUtils.lerp(state.steerAngle, steerInput, 1 - Math.exp(-dt * 9.5));
 
   forwardVec.set(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
   rightVec.set(Math.cos(state.yaw), 0, -Math.sin(state.yaw));
@@ -342,40 +511,33 @@ function updateBoatPhysics(dt, time) {
   const forwardSpeed = state.vel.dot(forwardVec);
   const lateralSpeed = state.vel.dot(rightVec);
 
-  // Turning torque scales with water flow over the lower units
   const turnPower = keys.drift ? 2.45 : 1.85;
-  const speedTurnFactor = THREE.MathUtils.clamp(Math.abs(forwardSpeed) / 7.5, 0.28, 1.15);
+  const speedTurnFactor = THREE.MathUtils.clamp(Math.abs(forwardSpeed) / 7.2, 0.28, 1.15);
   const reverseSign = forwardSpeed < -1.5 ? -1 : 1;
   const targetYawVel = state.steerAngle * turnPower * speedTurnFactor * reverseSign;
-  state.yawVel = THREE.MathUtils.lerp(state.yawVel, targetYawVel, Math.min(1, dt * (state.airborne ? 1.5 : 5.8)));
+  state.yawVel = THREE.MathUtils.lerp(state.yawVel, targetYawVel, 1 - Math.exp(-dt * (state.airborne ? 1.6 : 6.4)));
   state.yaw += state.yawVel * dt;
 
-  // Recompute basis after yaw step
   forwardVec.set(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
   rightVec.set(Math.cos(state.yaw), 0, -Math.sin(state.yaw));
 
-  // Propulsion thrust (only applies strongly when props are in water!)
-  const thrustAccel = boosting ? 42.0 : 25.5;
+  const thrustAccel = boosting ? 43.0 : 26.0;
   const propGrip = state.airborne ? 0.12 : 1.0;
   let newFwd = forwardSpeed + throttle * thrustAccel * propGrip * dt;
 
-  // Hydrodynamic quadratic + linear drag (caps around ~35 m/s cruising, ~50 m/s boost)
   const fwdDrag = state.airborne ? 0.14 : (boosting ? 0.48 : 0.72);
-  newFwd *= Math.max(0, 1 - fwdDrag * dt);
+  newFwd *= Math.exp(-fwdDrag * dt);
   newFwd = THREE.MathUtils.clamp(newFwd, -13, 52);
 
-  // Lateral keel grip (carving vs drifting)
-  const latGrip = state.airborne ? 0.3 : (keys.drift ? 2.1 : 4.2);
-  const newLat = lateralSpeed * Math.max(0, 1 - latGrip * dt);
+  const latGrip = state.airborne ? 0.3 : (keys.drift ? 2.0 : 4.3);
+  const newLat = lateralSpeed * Math.exp(-latGrip * dt);
 
   state.vel.copy(forwardVec).multiplyScalar(newFwd).addScaledVector(rightVec, newLat);
   state.speed = newFwd;
 
-  // Move horizontally
   state.pos.x += state.vel.x * dt;
   state.pos.z += state.vel.z * dt;
 
-  // Keep boat inside generous tropical bay boundary (~920m)
   const distOrigin = Math.hypot(state.pos.x, state.pos.z);
   if (distOrigin > 880) {
     const push = (distOrigin - 880) * 0.5;
@@ -383,7 +545,6 @@ function updateBoatPhysics(dt, time) {
     state.pos.z -= (state.pos.z / distOrigin) * push;
   }
 
-  // Soft collision against island beaches
   for (const isl of world.islands) {
     const dx = state.pos.x - isl.x;
     const dz = state.pos.z - isl.z;
@@ -403,12 +564,11 @@ function updateBoatPhysics(dt, time) {
     }
   }
 
-  // Soft collision against NPC boats
   for (const v of world.npcVessels) {
     const dx = state.pos.x - v.mesh.position.x;
     const dz = state.pos.z - v.mesh.position.z;
     const dist = Math.hypot(dx, dz);
-    const minDist = 7.8;
+    const minDist = 8.0;
     if (dist < minDist && dist > 0.001) {
       const nx = dx / dist;
       const nz = dz / dist;
@@ -419,7 +579,7 @@ function updateBoatPhysics(dt, time) {
     }
   }
 
-  // --- Multi-point Ocean Wave Sampling & Stunt Ramp Detection ---
+  // Multi-point Gerstner wave sampling
   const bowSample = sampleOcean(state.pos.x + forwardVec.x * 3.4, state.pos.z + forwardVec.z * 3.4, time);
   const sternSample = sampleOcean(state.pos.x - forwardVec.x * 3.2, state.pos.z - forwardVec.z * 3.2, time);
   const portSample = sampleOcean(state.pos.x - rightVec.x * 1.3, state.pos.z - rightVec.z * 1.3, time);
@@ -428,7 +588,6 @@ function updateBoatPhysics(dt, time) {
   let surfaceY = (bowSample.height + sternSample.height + portSample.height + stbdSample.height) * 0.25;
   let onRamp = false;
 
-  // Check wooden stunt jump ramps
   for (const r of world.ramps) {
     const dx = state.pos.x - r.x;
     const dz = state.pos.z - r.z;
@@ -437,43 +596,39 @@ function updateBoatPhysics(dt, time) {
     const lx = dx * cosR - dz * sinR;
     const lz = dx * sinR + dz * cosR;
     if (Math.abs(lx) < r.halfWidth && Math.abs(lz) < r.halfLength) {
-      // Ramp rises from z = +halfLength (y=0) to z = -halfLength (y=3.1)
       const tRamp = THREE.MathUtils.clamp((r.halfLength - lz) / (r.halfLength * 2), 0, 1);
       const rampY = r.mesh.position.y + tRamp * 3.15;
       if (rampY > surfaceY) {
         surfaceY = rampY;
         onRamp = true;
-        // Launch impulse near ramp lip!
         if (tRamp > 0.78 && newFwd > 14 && state.vy < 8.5) {
-          state.vy = Math.max(state.vy, Math.min(11.5, newFwd * 0.34));
+          state.vy = Math.max(state.vy, Math.min(11.8, newFwd * 0.35));
           hud.showToast('AIRTIME!', 1100);
         }
       }
     }
   }
 
-  // Vertical buoyancy spring + gravity
-  const planingLift = THREE.MathUtils.clamp(Math.abs(newFwd) / 30, 0, 1) * 0.24;
+  const planingLift = THREE.MathUtils.clamp(Math.abs(newFwd) / 30, 0, 1) * 0.25;
   const targetY = surfaceY + 0.14 + planingLift;
   const depth = targetY - state.pos.y;
   let splashBurst = 0;
 
   if (depth > 0 || onRamp) {
-    // In water (or riding ramp): strong buoyancy spring + damping
-    if (state.airborne && state.vy < -3.2) {
-      splashBurst = THREE.MathUtils.clamp(Math.abs(state.vy) / 7.5, 0.35, 1.5);
+    if (state.airborne && state.vy < -3.0) {
+      splashBurst = THREE.MathUtils.clamp(Math.abs(state.vy) / 7.2, 0.35, 1.6);
       audio.playSplash(splashBurst);
+      state.camShake = Math.min(1.0, state.camShake + splashBurst * 0.55);
+      state.sprayWet = Math.min(1.0, state.sprayWet + splashBurst * 0.75);
     }
     state.airborne = false;
-    const springK = onRamp ? 42 : 24;
-    const damp = onRamp ? 9.5 : 6.4;
+    const springK = onRamp ? 42 : 26;
+    const damp = onRamp ? 10.2 : 7.4;
     state.vy += (depth * springK - state.vy * damp) * dt;
-    // High-speed wave crest launch
-    if (!onRamp && newFwd > 24 && bowSample.height - sternSample.height > 0.35 && state.pos.y > surfaceY - 0.1) {
-      state.vy += (newFwd - 22) * 0.22 * dt;
+    if (!onRamp && newFwd > 25 && bowSample.height - sternSample.height > 0.34 && state.pos.y > surfaceY - 0.1) {
+      state.vy += (newFwd - 23) * 0.22 * dt;
     }
   } else {
-    // Airborne!
     state.vy -= 15.2 * dt;
     if (state.pos.y - targetY > 0.65) {
       state.airborne = true;
@@ -485,44 +640,61 @@ function updateBoatPhysics(dt, time) {
     state.pos.y = targetY;
   }
 
-  // Dynamic hull pitch (waves + powerboat bow-up trim at speed + ramp angle)
+  // Critically-damped smooth hull pitch & roll (liquid-smooth marine inertia!)
   const wavePitch = Math.atan2(bowSample.height - sternSample.height, 6.6);
   const trimPitch = THREE.MathUtils.clamp(newFwd / 38, -0.05, 0.14) + (boosting ? 0.055 : 0);
-  const airPitch = state.airborne ? THREE.MathUtils.clamp(state.vy * 0.032, -0.22, 0.28) : 0;
-  const targetPitch = onRamp ? 0.24 : (wavePitch * 0.78 + trimPitch + airPitch);
+  const airPitch = state.airborne ? THREE.MathUtils.clamp(state.vy * 0.03, -0.22, 0.26) : 0;
+  const targetPitch = onRamp ? 0.24 : (wavePitch * 0.76 + trimPitch + airPitch);
 
-  // Dynamic hull roll (waves + carving inward bank into turns)
   const waveRoll = Math.atan2(portSample.height - stbdSample.height, 2.6);
-  const bankRoll = state.steerAngle * THREE.MathUtils.clamp(Math.abs(newFwd) / 26, 0, 1) * (keys.drift ? 0.36 : 0.24);
-  const targetRoll = waveRoll * 0.65 + bankRoll;
+  const bankRoll = state.steerAngle * THREE.MathUtils.clamp(Math.abs(newFwd) / 25, 0, 1) * (keys.drift ? 0.36 : 0.25);
+  const targetRoll = waveRoll * 0.62 + bankRoll;
 
-  state.pitch = THREE.MathUtils.lerp(state.pitch, targetPitch, Math.min(1, dt * 6.5));
-  state.roll = THREE.MathUtils.lerp(state.roll, targetRoll, Math.min(1, dt * 6.5));
+  state.pitch = smoothDampScalar(state.pitch, targetPitch, pitchVelRef, 0.16, dt);
+  state.roll = smoothDampScalar(state.roll, targetRoll, rollVelRef, 0.15, dt);
 
-  // Apply transform to 3D boat mesh
+  return { throttle, boosting, splashBurst, surfaceY };
+}
+
+function updateBoat(dt, time) {
+  // 2 physics sub-steps per frame for ultra-consistent smoothness at any refresh rate
+  const subDt = dt * 0.5;
+  let lastRes = stepPhysics(subDt, time - subDt);
+  const res2 = stepPhysics(subDt, time);
+  lastRes = {
+    throttle: res2.throttle,
+    boosting: res2.boosting,
+    splashBurst: Math.max(lastRes.splashBurst, res2.splashBurst),
+    surfaceY: res2.surfaceY
+  };
+
   boat.root.position.copy(state.pos);
   boat.root.rotation.order = 'YXZ';
   boat.root.rotation.set(state.pitch, state.yaw, state.roll);
 
-  // Update outboard steering, propellers, driver lean & spray particles
   boat.updateVisuals(dt, {
     steerAngle: state.steerAngle,
-    speed: newFwd,
-    throttle,
-    boosting,
-    splashBurst,
-    waterY: surfaceY
+    speed: state.speed,
+    throttle: lastRes.throttle,
+    boosting: lastRes.boosting,
+    splashBurst: lastRes.splashBurst,
+    waterY: lastRes.surfaceY,
+    time,
+    airborne: state.airborne
   });
 
-  // Update procedural audio
   audio.update(
-    THREE.MathUtils.clamp(Math.abs(newFwd) / 36, 0, 1.3),
-    Math.abs(throttle),
-    boosting,
+    THREE.MathUtils.clamp(Math.abs(state.speed) / 36, 0, 1.3),
+    Math.abs(lastRes.throttle),
+    lastRes.boosting,
     state.airborne
   );
 
-  // --- Checkpoints & Island Run Timer ---
+  // Subtle camera boost surge lag & spray evaporation
+  state.boostLag = THREE.MathUtils.lerp(state.boostLag, lastRes.boosting ? 1.55 : 0, 1 - Math.exp(-dt * 4.5));
+  state.camShake = Math.max(0, state.camShake - dt * 2.4);
+  state.sprayWet = Math.max(0, state.sprayWet - dt * 0.45);
+
   if (state.started && state.mode === 'run') {
     state.runTime += dt;
     const cp = world.checkpoints[state.cpIndex];
@@ -560,74 +732,101 @@ function finishRun() {
   finishOverlay.classList.remove('hidden');
 }
 
-// --- Camera Controller ---
+// --- Critically-Damped GTA VI Spring Camera ---
 const desiredCamPos = new THREE.Vector3();
 const desiredLookAt = new THREE.Vector3();
+const sunProjVec = new THREE.Vector3();
 
-function updateCamera(dt) {
+function updateCamera(dt, time) {
   const modeName = CAMERA_MODES[state.cameraIdx];
 
-  // Gently recenter mouse orbit while driving
   if (!state.isDragging && Math.abs(state.speed) > 3.5 && modeName !== 'Orbit') {
-    state.orbitYawOffset = THREE.MathUtils.lerp(state.orbitYawOffset, 0, Math.min(1, dt * 1.4));
-    state.orbitPitchOffset = THREE.MathUtils.lerp(state.orbitPitchOffset, 0, Math.min(1, dt * 1.4));
+    state.orbitYawOffset = THREE.MathUtils.lerp(state.orbitYawOffset, 0, 1 - Math.exp(-dt * 1.6));
+    state.orbitPitchOffset = THREE.MathUtils.lerp(state.orbitPitchOffset, 0, 1 - Math.exp(-dt * 1.6));
   }
 
   const speedFactor = THREE.MathUtils.clamp(Math.abs(state.speed) / 38, 0, 1);
 
   if (modeName === 'Helm') {
-    // First-person behind center console windshield
     const helmLocal = new THREE.Vector3(-0.14, 2.02, 0.24).applyQuaternion(boat.root.quaternion);
     const lookLocal = new THREE.Vector3(-0.14, 1.82, -26).applyQuaternion(boat.root.quaternion);
     camera.position.copy(state.pos).add(helmLocal);
     camera.lookAt(state.pos.clone().add(lookLocal));
-    camera.fov = THREE.MathUtils.lerp(camera.fov, 64 + speedFactor * 8, Math.min(1, dt * 5));
+    camera.fov = THREE.MathUtils.lerp(camera.fov, 64 + speedFactor * 8, 1 - Math.exp(-dt * 5));
     camera.updateProjectionMatrix();
     return;
   }
 
-  // Chase / Close / Orbit configurations
-  let backDist = 11.4 + speedFactor * 1.8;
-  let height = 3.55 + speedFactor * 0.35;
-  let lookAhead = 22.0;
+  // Tight cinematic GTA VI chase framing over the twin black outboards
+  let backDist = 9.75 + speedFactor * 1.45 + state.boostLag;
+  let height = 2.98 + speedFactor * 0.28;
+  let lookAhead = 24.0;
 
   if (modeName === 'Close') {
-    backDist = 8.4 + speedFactor * 1.1;
-    height = 2.55;
-    lookAhead = 18.0;
+    backDist = 7.8 + speedFactor * 1.0 + state.boostLag * 0.7;
+    height = 2.38;
+    lookAhead = 19.0;
   } else if (modeName === 'Orbit') {
-    backDist = 18.5;
-    height = 6.2;
+    backDist = 17.5;
+    height = 5.8;
     lookAhead = 4.0;
   }
 
   const totalYaw = state.yaw + state.orbitYawOffset;
-  const pitchLift = state.orbitPitchOffset * 8.0;
+  const pitchLift = state.orbitPitchOffset * 7.5;
+
+  // Subtle lateral swing-out into carve turns (gives buttery GTA VI weight!)
+  const turnSwing = -state.steerAngle * speedFactor * 0.75;
 
   desiredCamPos.set(
-    state.pos.x + Math.sin(totalYaw) * backDist,
-    Math.max(1.2, state.pos.y + height + pitchLift),
-    state.pos.z + Math.cos(totalYaw) * backDist
+    state.pos.x + Math.sin(totalYaw) * backDist + Math.cos(totalYaw) * turnSwing,
+    Math.max(1.15, state.pos.y + height + pitchLift),
+    state.pos.z + Math.cos(totalYaw) * backDist - Math.sin(totalYaw) * turnSwing
   );
 
   desiredLookAt.set(
     state.pos.x - Math.sin(totalYaw) * lookAhead,
-    state.pos.y + 1.55 - state.orbitPitchOffset * 3.0,
+    state.pos.y + 1.48 - state.orbitPitchOffset * 2.8,
     state.pos.z - Math.cos(totalYaw) * lookAhead
   );
 
-  const smoothPos = 1 - Math.exp(-dt * 7.2);
-  const smoothLook = 1 - Math.exp(-dt * 9.5);
-  camPosSmooth.lerp(desiredCamPos, smoothPos);
-  camLookSmooth.lerp(desiredLookAt, smoothLook);
+  smoothDampVec3(camPosSmooth, desiredCamPos, camPosVel, 0.16, dt);
+  smoothDampVec3(camLookSmooth, desiredLookAt, camLookVel, 0.11, dt);
 
   camera.position.copy(camPosSmooth);
+
+  // Cushioned impact micro-shake on big wave jump landings
+  if (state.camShake > 0.005) {
+    const amp = state.camShake * 0.22;
+    camera.position.x += Math.sin(time * 48.0) * amp;
+    camera.position.y += Math.cos(time * 57.0) * amp * 0.85;
+  }
+
   camera.lookAt(camLookSmooth);
 
-  // Dynamic FOV kick on speed & nitro boost
-  const targetFov = 56 + speedFactor * 10 + (keys.boost && state.boost > 0.05 && state.started ? 6 : 0);
-  camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, Math.min(1, dt * 5));
+  // Ultra-subtle cinematic horizon banking when carving hard turns
+  const targetCamRoll = -state.steerAngle * speedFactor * 0.032;
+  state.camRoll = THREE.MathUtils.lerp(state.camRoll, targetCamRoll, 1 - Math.exp(-dt * 5.0));
+  camera.rotateZ(state.camRoll);
+
+  // Smooth speed/boost FOV kick
+  const targetFov = 55 + speedFactor * 9.5 + (keys.boost && state.boost > 0.05 && state.started ? 5.5 : 0);
+  camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.exp(-dt * 4.8));
   camera.updateProjectionMatrix();
+
+  // Project sun direction onto screen space for cinematic lens glare pass
+  if (gradePass) {
+    const p = TIME_PRESETS[TIME_KEYS[state.timeIdx]] || TIME_PRESETS.noon;
+    sunProjVec.copy(camera.position).addScaledVector(p.sunDir, 1000).project(camera);
+    const inFront = sunProjVec.z < 1.0;
+    const sx = sunProjVec.x * 0.5 + 0.5;
+    const sy = sunProjVec.y * 0.5 + 0.5;
+    const camDotSun = camera.getWorldDirection(desiredLookAt).dot(p.sunDir);
+    gradePass.uniforms.uSunScreen.value.set(sx, sy);
+    gradePass.uniforms.uSunVisible.value = inFront ? THREE.MathUtils.clamp((camDotSun - 0.15) * 1.4, 0, 1) : 0;
+    gradePass.uniforms.uSprayWet.value = state.sprayWet;
+    gradePass.uniforms.uTime.value = time;
+  }
 }
 
 // --- Main Animation Loop ---
@@ -640,8 +839,8 @@ function animate() {
   const dt = Math.min(0.05, Math.max(0.001, now - prevTime));
   prevTime = now;
 
-  updateBoatPhysics(dt, now);
-  updateCamera(dt);
+  updateBoat(dt, now);
+  updateCamera(dt, now);
 
   const sternWorld = boat.getSternWorldPosition();
   ocean.update(now, dt, state.pos, sternWorld, state.speed);
@@ -664,7 +863,11 @@ function animate() {
     camera
   });
 
-  renderer.render(scene, camera);
+  if (composer) {
+    composer.render();
+  } else {
+    renderer.render(scene, camera);
+  }
 }
 
 animate();

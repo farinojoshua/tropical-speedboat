@@ -297,6 +297,32 @@ export function createSpeedboat(scene) {
   }
   consoleGroup.add(wheelPivot);
 
+  // Dual chrome marine throttle binnacle levers (physically tilt forward with throttle!)
+  const throttlePivot = new THREE.Group();
+  throttlePivot.position.set(0.36, 1.06, 0.36);
+  for (const lx of [-0.032, 0.032]) {
+    const lever = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.012, 0.22, 10), chromeMat);
+    lever.position.set(lx, 0.10, 0);
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 10), darkTrim);
+    knob.position.set(lx, 0.22, 0);
+    throttlePivot.add(lever, knob);
+  }
+  consoleGroup.add(throttlePivot);
+
+  // Interior padded white marine coaming bolsters & chrome mooring cleats along both gunwales
+  for (const side of [-1, 1]) {
+    const bolster = new THREE.Mesh(createRoundedBoxGeo(0.12, 0.22, 3.8, 0.05, 4), cushionLightMat);
+    bolster.position.set(side * 1.12, 0.78, 0.72);
+    hullGroup.add(bolster);
+
+    for (const cz of [2.55, -0.35]) {
+      const cleat = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.16, 6, 10), chromeMat);
+      cleat.rotation.x = Math.PI * 0.5;
+      cleat.position.set(side * 1.24, 1.05, cz);
+      hullGroup.add(cleat);
+    }
+  }
+
   // --- 5. Organic Sculpted Driver & Passenger (Zero Boxes!) ---
   const driver = createOrganicPerson({
     shirtColor: '#dde3e7',
@@ -350,7 +376,11 @@ export function createSpeedboat(scene) {
 
   scene.add(root);
 
-  // --- 7. Soft Billowy 3D Water Spray & Prop-Wash Foam ---
+  // --- 7. Animated 3D Bow/Chine Water Sheets & Churning Twin-Prop Boil ---
+  const waterSheets = createHullWaterSheets();
+  hullGroup.add(waterSheets.group);
+
+  // --- 8. Soft Billowy 3D Water Spray & Prop-Wash Foam ---
   const spray = createSpraySystem(scene);
 
   const sternLocal = new THREE.Vector3(0, 0, 4.18);
@@ -361,26 +391,204 @@ export function createSpeedboat(scene) {
     return sternWorld.copy(sternLocal).applyMatrix4(root.matrixWorld);
   }
 
-  function updateVisuals(dt, { steerAngle, speed, throttle, boosting, splashBurst, waterY }) {
+  function updateVisuals(dt, { steerAngle, speed, throttle, boosting, splashBurst, waterY, time = 0, airborne = false }) {
     const motorYaw = -steerAngle * 0.55;
     for (const m of motors) {
       m.rotation.y = THREE.MathUtils.lerp(m.rotation.y, motorYaw, Math.min(1, dt * 12));
     }
     wheelPivot.rotation.z = THREE.MathUtils.lerp(wheelPivot.rotation.z, -steerAngle * 1.4, Math.min(1, dt * 10));
+    throttlePivot.rotation.x = THREE.MathUtils.lerp(
+      throttlePivot.rotation.x,
+      -throttle * 0.52 - (boosting ? 0.18 : 0),
+      Math.min(1, dt * 9)
+    );
 
     const propSpin = (2.5 + Math.abs(speed) * 1.3 + Math.abs(throttle) * 14.0) * dt;
     for (const p of propellers) {
       p.rotation.z += propSpin;
     }
 
-    driver.rotation.z = THREE.MathUtils.lerp(driver.rotation.z, steerAngle * 0.16, Math.min(1, dt * 6));
-    passenger.rotation.z = THREE.MathUtils.lerp(passenger.rotation.z, steerAngle * 0.12, Math.min(1, dt * 5));
+    // Natural driver & passenger lean + gentle breathing/wave counter-balance
+    const sway = Math.sin(time * 2.6) * 0.015;
+    driver.rotation.z = THREE.MathUtils.lerp(driver.rotation.z, steerAngle * 0.18 + sway, Math.min(1, dt * 6));
+    driver.rotation.x = THREE.MathUtils.lerp(driver.rotation.x, (boosting ? 0.08 : throttle * 0.04), Math.min(1, dt * 5));
+    passenger.rotation.z = THREE.MathUtils.lerp(passenger.rotation.z, steerAngle * 0.14 - sway, Math.min(1, dt * 5));
 
-    boostGlow.intensity = THREE.MathUtils.lerp(boostGlow.intensity, boosting ? 3.5 : 0, Math.min(1, dt * 8));
+    boostGlow.intensity = THREE.MathUtils.lerp(boostGlow.intensity, boosting ? 3.8 : 0, Math.min(1, dt * 8));
+    waterSheets.update(time, dt, speed, steerAngle, boosting, airborne);
     spray.update(dt, root, speed, steerAngle, boosting, splashBurst, waterY);
   }
 
   return { root, hullGroup, getSternWorldPosition, updateVisuals };
+}
+
+/**
+ * Animated 3D curving frothy water curtains hugging both sides of the hull
+ * plus the churning white prop-wash boil right between the twin outboards (GTA VI look!).
+ */
+function createHullWaterSheets() {
+  const group = new THREE.Group();
+
+  const sheetShader = {
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uIntensity: { value: 0 }
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uIntensity;
+      void main() {
+        vUv = uv;
+        vec3 p = position;
+        float flutter = sin(uv.x * 16.0 - uTime * 14.0) * 0.08 * uv.y * uIntensity;
+        p.y += flutter;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uIntensity;
+
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+          mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+      void main() {
+        vec2 flowUv = vec2(vUv.x * 5.0 - uTime * 3.8, vUv.y * 3.2 - uTime * 1.4);
+        float n = noise(flowUv) * 0.65 + noise(flowUv * 2.4 + 3.1) * 0.35;
+        float edgeFade = smoothstep(0.0, 0.16, vUv.x) * (1.0 - smoothstep(0.74, 1.0, vUv.x));
+        float crestFade = smoothstep(0.0, 0.18, vUv.y) * (1.0 - smoothstep(0.45, 1.0, vUv.y));
+        float alpha = smoothstep(0.24, 0.72, n) * edgeFade * crestFade * uIntensity * 0.82;
+        if (alpha < 0.01) discard;
+        vec3 col = mix(vec3(0.68, 0.95, 0.98), vec3(1.0), smoothstep(0.32, 0.75, n));
+        gl_FragColor = vec4(col, alpha);
+      }
+    `
+  };
+
+  const sideMat = new THREE.ShaderMaterial({
+    ...sheetShader,
+    uniforms: {
+      uTime: { value: 0 },
+      uIntensity: { value: 0 }
+    }
+  });
+
+  // Sculpted curling water curtain along port & starboard hull chines
+  function makeCurledSheet(side) {
+    const segX = 24;
+    const segY = 8;
+    const pos = [];
+    const uvs = [];
+    const idx = [];
+    for (let ix = 0; ix <= segX; ix++) {
+      const u = ix / segX; // 0 = bow entry, 1 = aft wake flare
+      const z = THREE.MathUtils.lerp(-2.6, 5.4, u);
+      const hullW = u < 0.45 ? THREE.MathUtils.lerp(0.88, 1.38, u / 0.45) : 1.38 + (u - 0.45) * 1.65;
+      for (let iy = 0; iy <= segY; iy++) {
+        const v = iy / segY; // 0 = hull waterline, 1 = outward curling foam crest
+        const spread = v * (0.42 + u * 1.45);
+        const curlY = Math.sin(v * Math.PI * 0.85) * (0.32 + u * 0.48) - v * v * 0.25;
+        pos.push(side * (hullW + spread), 0.04 + curlY, z);
+        uvs.push(u, v);
+      }
+    }
+    for (let ix = 0; ix < segX; ix++) {
+      for (let iy = 0; iy < segY; iy++) {
+        const a = ix * (segY + 1) + iy;
+        const b = a + (segY + 1);
+        idx.push(a, b, a + 1, a + 1, b, b + 1);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(idx);
+    return new THREE.Mesh(geo, sideMat);
+  }
+
+  const portSheet = makeCurledSheet(-1);
+  const stbdSheet = makeCurledSheet(1);
+  group.add(portSheet, stbdSheet);
+
+  // Frothy churning twin-outboard prop-wash boil right behind transom (between the black motors!)
+  const boilMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uIntensity: { value: 0 }
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uIntensity;
+      void main() {
+        vUv = uv;
+        vec3 p = position;
+        p.y += sin(uv.y * 14.0 - uTime * 18.0) * 0.09 * uIntensity * (1.0 - uv.y * 0.5);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uIntensity;
+      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float noise(vec2 p) {
+        vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+      }
+      void main() {
+        vec2 uv = vec2(vUv.x * 3.5, vUv.y * 5.0 - uTime * 4.5);
+        float n = noise(uv) * 0.6 + noise(uv * 2.4 - vec2(0.0, uTime * 2.2)) * 0.4;
+        float sideFade = smoothstep(0.0, 0.25, vUv.x) * (1.0 - smoothstep(0.75, 1.0, vUv.x));
+        float lenFade = smoothstep(0.0, 0.14, vUv.y) * (1.0 - smoothstep(0.52, 1.0, vUv.y));
+        float alpha = smoothstep(0.20, 0.68, n) * sideFade * lenFade * uIntensity * 0.92;
+        if (alpha < 0.01) discard;
+        vec3 col = mix(vec3(0.72, 0.96, 0.99), vec3(1.0), smoothstep(0.28, 0.72, n));
+        gl_FragColor = vec4(col, alpha);
+      }
+    `
+  });
+
+  const boilGeo = new THREE.PlaneGeometry(2.15, 4.6, 12, 16);
+  boilGeo.rotateX(-Math.PI * 0.5);
+  const boilMesh = new THREE.Mesh(boilGeo, boilMat);
+  boilMesh.position.set(0, 0.14, 5.75);
+  group.add(boilMesh);
+
+  let smoothIntensity = 0;
+
+  function update(time, dt, speed, steerAngle, boosting, airborne) {
+    const target = airborne ? 0 : THREE.MathUtils.clamp((Math.abs(speed) - 2.0) / 16.0, 0, 1.25) * (boosting ? 1.2 : 1.0);
+    smoothIntensity = THREE.MathUtils.lerp(smoothIntensity, target, Math.min(1, dt * 6));
+    sideMat.uniforms.uTime.value = time;
+    sideMat.uniforms.uIntensity.value = smoothIntensity;
+    boilMat.uniforms.uTime.value = time;
+    boilMat.uniforms.uIntensity.value = smoothIntensity;
+
+    // Outside sheet flares slightly taller during hard carve turns
+    portSheet.scale.setScalar(1.0 + Math.max(0, -steerAngle) * 0.18);
+    stbdSheet.scale.setScalar(1.0 + Math.max(0, steerAngle) * 0.18);
+  }
+
+  return { group, update };
 }
 
 /**
